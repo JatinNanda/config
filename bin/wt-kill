@@ -1,0 +1,44 @@
+#!/usr/bin/env zsh
+# Remove one or more worktrees (paths as args): force-remove, delete each branch,
+# prune, and close their tmux windows. Mirrors `wt close` but path-based and
+# batch-capable so fzf can pass marked items via {+1}. Confirms once up front
+# because --force discards uncommitted changes and branch -D drops unmerged commits.
+emulate zsh
+(( $# )) || { print -u2 "wt-kill: no worktree given"; exit 1 }
+
+# validate + collect targets (skip anything invalid or a main working tree)
+typeset -a targets
+for wt in "$@"; do
+    [[ -d $wt ]] || { print -u2 "wt-kill: skip (not a dir): $wt"; continue }
+    main=$(git -C "$wt" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')
+    [[ -z $main ]] && { print -u2 "wt-kill: skip (not a worktree): $wt"; continue }
+    [[ $wt == $main ]] && { print -u2 "wt-kill: skip (main working tree): $wt"; continue }
+    targets+=("$wt")
+done
+(( ${#targets} )) || exit 0
+
+# confirm once
+if (( ${#targets} == 1 )); then
+    br=$(git -C "${targets[1]}" symbolic-ref --quiet --short HEAD 2>/dev/null)
+    read -q "?kill worktree ${targets[1]:t}  (${br:-detached})? [y/N] " || { echo; exit 0 }
+else
+    print "kill ${#targets} worktrees:"
+    for wt in "${targets[@]}"; do print "  ${wt:t}"; done
+    read -q "?proceed? [y/N] " || { echo; exit 0 }
+fi
+echo
+
+for wt in "${targets[@]}"; do
+    main=$(git -C "$wt" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')
+    branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)
+    if [[ -n $TMUX ]]; then
+        win=$(tmux list-windows -F '#{window_id} #{pane_current_path}' 2>/dev/null \
+              | awk -v p="$wt" '$2==p || index($2, p"/")==1 {print $1; exit}')
+        [[ -n $win ]] && tmux kill-window -t "$win" 2>/dev/null
+    fi
+    git -C "$main" worktree remove --force "$wt" >/dev/null 2>&1
+    git -C "$main" worktree prune >/dev/null 2>&1
+    [[ -n $branch ]] && git -C "$main" branch -D "$branch" >/dev/null 2>&1
+    print "killed ${wt:t}"
+done
+exit 0
