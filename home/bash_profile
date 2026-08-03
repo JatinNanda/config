@@ -1,0 +1,2 @@
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+[ -f "$HOME/.bash_profile.local" ] && . "$HOME/.bash_profile.local"

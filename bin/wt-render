@@ -1,0 +1,37 @@
+#!/usr/bin/env zsh
+# Emit one tab-delimited line per feature worktree under ~/.worktrees:
+#   <path>\t<colorized display>
+# Display: ▶ you-are-here (path == $WT_CUR), ● dirty / · clean, ⚠ branch≠dir.
+# One git call per worktree, fanned out in parallel; caller/fzf splits on the tab.
+emulate zsh
+setopt no_monitor
+cur=${WT_CUR:-}
+
+_row() {
+    local wtpath=$1 repo=$2 feature=$3 branch=$4 dirty=$5
+    local dot='·' tag=''
+    [[ $dirty == dirty ]] && dot=$'\e[31m●\e[0m'
+    [[ ${branch#jatin/} != $feature ]] && tag=$' \e[33m⚠ '"$branch"$'\e[0m'
+    if [[ $wtpath == $cur ]]; then
+        printf '%s\t\e[1;32m▶\e[0m %s \e[1;32m%-36s\e[0m%s\n' "$wtpath" "$dot" "$repo/$feature" "$tag"
+    else
+        printf '%s\t  %s %-36s%s\n' "$wtpath" "$dot" "$repo/$feature" "$tag"
+    fi
+}
+
+{
+    for d in "$HOME"/.worktrees/*/*(N/); do
+        {
+            sb=$(git -C "$d" status --porcelain=v1 -b 2>/dev/null)
+            first=${sb%%$'\n'*}; first=${first#\#\# }
+            if [[ $first == *'(no branch)'* ]]; then
+                branch='(detached)'
+            else
+                branch=${first%%...*}; branch=${branch%% *}
+            fi
+            [[ $sb == *$'\n'* ]] && dirty=dirty || dirty=clean
+            _row "$d" "${d:h:t}" "${d:t}" "$branch" "$dirty"
+        } &
+    done
+    wait
+} | sort -t$'\t' -k1,1

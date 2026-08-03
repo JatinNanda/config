@@ -1,0 +1,353 @@
+# history
+HISTSIZE=999999999
+SAVEHIST=999999999
+setopt EXTENDED_HISTORY       # save timestamp + duration
+setopt HIST_IGNORE_ALL_DUPS   # deduplicate older entries
+setopt HIST_FIND_NO_DUPS      # don't show dupes when searching
+setopt SHARE_HISTORY          # share across tmux panes/windows
+setopt APPEND_HISTORY         # don't overwrite history file
+
+export ZSH="$HOME/.oh-my-zsh"
+export KEYTIMEOUT=20
+export EDITOR=nvim
+export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
+export PATH="$PATH:$(go env GOPATH 2>/dev/null)/bin"
+export PATH="$HOME/.local/bin:$PATH"
+
+# default GitHub org for clone(); empty lists your own repos
+export GH_ORG=""
+
+# machine-local, untracked: secrets, per-job env, overrides
+[ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
+
+alias vim="nvim"
+alias ag="ag --ignore-dir node_modules --ignore-dir coverage --ignore-dir log --ignore-dir logs --ignore-dir venv --ignore-dir transpiled --ignore-dir .terragrunt-cache"
+alias tls="tmux list-sessions"
+alias at="tmux attach-session -t $1"
+alias vg="vim +Git +only"
+alias vm="vim -c 'Git mergetool'"
+alias vf="vim -c 'Telescope find_files'"
+alias agv="vim -c 'Telescope live_grep'"
+alias cb="git branch --show-current | pbcopy"
+
+# re-source dots
+alias sz="source ~/.zshrc"
+alias st="tmux source-file ~/.tmux.conf"
+alias z="vim ~/.zshrc"
+alias t="vim ~/.tmux.conf"
+alias v="vim ~/.vimrc"
+
+alias ipython="ipython --TerminalInteractiveShell.editing_mode=vi"
+
+ZSH_THEME="jatin"
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+plugins=(
+  vi-mode
+  git
+  zsh-syntax-highlighting
+  zsh-autosuggestions
+  zsh-fzf-history-search
+  extract
+  kubectl
+)
+
+source $ZSH/oh-my-zsh.sh
+
+# cd does ls
+chpwd() {
+  ls
+}
+
+# runs pytests from name regardless of path
+ptf() {
+    find . -name "$1" -not -path "./node_modules/*" | xargs pytest
+}
+
+# runs python from name regardless of path
+pyf() {
+    find . -name "$1" -not -path "./node_modules/*" | xargs python
+}
+
+# find files from name
+f() {
+    find . -name "$1" -not -path "./node_modules/*"
+}
+
+# unix timestamp conversion
+dt() {
+    if [ -z $1 ]; then
+        date '+%s'
+    else
+        date -d "@$1"
+    fi
+}
+
+# cd to a directory 2 levels deep from root
+cdf() {
+    result=$(print -l $HOME/code/* | fzf)
+    if [ ! -z "$result" ]; then
+        cd $result
+    fi
+}
+
+# ---- git worktree navigation -----------------------------------------------
+# Rendering lives in ~/.local/bin/wt-render (standalone so fzf's reload binding
+# can call it); ~/.local/bin/wt-kill removes a worktree. ▶ here, ● dirty, ⚠ branch≠dir.
+
+# wtl — at-a-glance overview of every worktree
+wtl() {
+    emulate -L zsh
+    WT_CUR=$(git rev-parse --show-toplevel 2>/dev/null) wt-render | cut -f2-
+}
+
+# cdw — interactive navigator.
+#   space : mark/unmark (multi-select)
+#   enter : switch (jump to the worktree's tmux window if one exists, else cd)
+#   ctrl-x: kill marked worktrees — or the hovered one if none marked ({+1}) —
+#           confirms once, then refreshes the list in place
+cdw() {
+    emulate -L zsh
+    local cur sel wtpath win
+    cur=$(git rev-parse --show-toplevel 2>/dev/null)
+    sel=$(WT_CUR=$cur wt-render \
+        | fzf --ansi --multi --delimiter='\t' --with-nth=2.. \
+              --preview='git -C {1} -c color.status=always status -sb; echo; git -C {1} log --color=always --oneline -10' \
+              --preview-window='right,58%,border-left' \
+              --bind='ctrl-n:down,ctrl-p:up' \
+              --bind='space:toggle+down' \
+              --bind="ctrl-x:execute(wt-kill {+1} >/dev/tty 2>&1)+reload(WT_CUR=$cur wt-render)" \
+              --header='space: mark   enter: switch   ctrl-x: kill marked')
+    [[ -z $sel ]] && return
+    wtpath=${sel##*$'\n'}
+    wtpath=${wtpath%%$'\t'*}
+    [[ -d $wtpath ]] || return
+    if [[ -n $TMUX ]]; then
+        win=$(tmux list-windows -F '#{window_id} #{pane_current_path}' 2>/dev/null \
+              | awk -v p="$wtpath" '$2==p || index($2, p"/")==1 {print $1; exit}')
+        [[ -n $win ]] && { tmux select-window -t "$win"; return; }
+    fi
+    cd "$wtpath"
+}
+
+# search and replace across matching files
+sr() {
+    ag -l "$1" | xargs sed -i '' "s/$1/$2/g"
+}
+
+# fzf-clone a repo from an org (defaults to $GH_ORG, else your own repos)
+clone() {
+    local org="${1:-$GH_ORG}"
+    local result
+    if [ -n "$org" ]; then
+        result=$(gh repo list "$org" -L 50000 | awk '{print $1}' | fzf)
+    else
+        result=$(gh repo list -L 50000 | awk '{print $1}' | fzf)
+    fi
+    [ -n "$result" ] && git clone "https://github.com/$result"
+}
+
+# checkout branch (fzf if no arg)
+co() {
+    if [ ! -z "$1" ]; then
+        git checkout "$1"
+    else
+        branch=$(git branch | fzf | rev | cut -d ' ' -f -1 | rev)
+        [ -n "$branch" ] && git checkout $branch
+    fi
+}
+
+# pull feature branch onto this one
+gpullfeat() {
+    if [ ! -z "$1" ]; then
+        git pull . "$1"
+    else
+        branch=$(git branch | fzf | rev | cut -d ' ' -f -1 | rev)
+        [ -n "$branch" ] && git pull . $branch
+    fi
+}
+
+# rebase current branch on the remote default branch
+gbasemaster() {
+    branch=$(git branch --show-current)
+    master_branch=$(git remote show origin | sed -n 's/.*HEAD branch: //p')
+    if [ "$branch" != "$master_branch" ]; then
+        git fetch
+        git rebase -i origin/$master_branch
+    fi
+}
+
+# hard reset to the remote default branch
+gresetmaster() {
+    git fetch
+    master_branch=$(git remote show origin | sed -n 's/.*HEAD branch: //p')
+    git reset --hard origin/$master_branch
+}
+
+# new branch off the freshest local base (dev/master/main)
+gnewb() {
+    branch=$(git branch | ag '^dev$|^master$|^main$' | awk '{$1=$1};1' | sed 's/* //')
+    git co $branch
+    git pull
+    git co -b "$1"
+}
+
+# cd to git project root
+cdr() {
+    cd "$(git rev-parse --show-toplevel)"
+}
+
+# open files from the last n commits' diff (defaults to last)
+vd() {
+    file=$(git diff HEAD~${1:-1} --name-only | fzf)
+    if [ ! -z "$file" ]; then
+        vim "$(git rev-parse --show-toplevel)/$file"
+    fi
+}
+
+# git diff last n commits (defaults to last commit)
+gdiffhead() {
+    git diff HEAD~${1:-1}
+}
+
+togb() {
+  awk '{ printf "%.2f GB\n", $1 / (1024 * 1024 * 1024) }'
+}
+
+export FZF_DEFAULT_COMMAND='ag --hidden --ignore .git --ignore .terragrunt-cache -g ""'
+
+# plugin settings
+bindkey '^ ' autosuggest-accept
+bindkey '^T' forward-word
+bindkey jk vi-cmd-mode
+
+# vi-mode + reverse-search history navigation
+if [[ "${terminfo[kcuu1]}" != "" ]]; then
+  autoload -U up-line-or-beginning-search
+  zle -N up-line-or-beginning-search
+  bindkey "${terminfo[kcuu1]}" up-line-or-beginning-search
+fi
+if [[ "${terminfo[kcud1]}" != "" ]]; then
+  autoload -U down-line-or-beginning-search
+  zle -N down-line-or-beginning-search
+  bindkey "${terminfo[kcud1]}" down-line-or-beginning-search
+fi
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
+
+export K9S_FEATURE_GATE_NODE_SHELL=true
+
+# git worktree helper — opens a new tmux window in an isolated worktree
+# usage: wt <feature-name> | wt close [feature-name]
+wt() {
+  # wt close — remove worktree + delete local branch
+  if [[ "$1" == "close" ]]; then
+    local feature="$2"
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "not in a git repo"; return 1; }
+
+    local worktree_path branch
+    if [[ -n "$feature" ]]; then
+      local repo_name=$(basename "$repo_root")
+      worktree_path="$HOME/.worktrees/$repo_name/$feature"
+      branch="jatin/$feature"
+    else
+      worktree_path="$PWD"
+      branch=$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      feature=$(basename "$worktree_path")
+    fi
+
+    if [[ "$PWD" == "$worktree_path"* ]]; then
+      cd "$repo_root" || return 1
+    fi
+
+    git -C "$repo_root" worktree remove --force "$worktree_path" 2>/dev/null
+    git -C "$repo_root" worktree prune 2>/dev/null
+    git -C "$repo_root" branch -D "$branch" 2>/dev/null && echo "deleted branch $branch"
+    echo "closed worktree: $feature"
+
+    if [[ -n "$TMUX" ]]; then
+      local win_name
+      win_name=$(tmux display-message -p '#W')
+      if [[ "$win_name" == "$feature" ]]; then
+        tmux kill-window
+      fi
+    fi
+    return 0
+  fi
+
+  local repo_root
+  # pick base repo from ~/code via fzf — independent of cwd
+  repo_root=$(find "$HOME/code" -mindepth 1 -maxdepth 2 -name .git -type d 2>/dev/null \
+    | sed 's|/.git$||' \
+    | sort \
+    | fzf --prompt="repo: " --header="select base repo for worktree" \
+          --bind='ctrl-n:down,ctrl-p:up')
+  [[ -z "$repo_root" ]] && { echo "no repo selected"; return 1; }
+
+  local repo_name=$(basename "$repo_root")
+
+  # base off the remote's actual default branch (main/master/etc.)
+  local default_branch
+  default_branch=$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  default_branch=${default_branch#origin/}
+  if [[ -z "$default_branch" ]]; then
+    git -C "$repo_root" remote set-head origin --auto >/dev/null 2>&1
+    default_branch=$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+    default_branch=${default_branch#origin/}
+  fi
+  [[ -z "$default_branch" ]] && default_branch=master
+  local base_ref="origin/$default_branch"
+
+  local feature branch worktree_path
+  if [[ -z "$1" ]]; then
+    echo "usage: wt <feature>  (use cdw to switch between existing worktrees)"
+    return 1
+  fi
+
+  feature="$1"
+  branch="jatin/$feature"
+  worktree_path="$HOME/.worktrees/$repo_name/$feature"
+
+  # if branch is already checked out somewhere, just open a window there
+  local existing_path
+  existing_path=$(git -C "$repo_root" worktree list --porcelain 2>/dev/null \
+    | awk -v b="refs/heads/$branch" '/^worktree /{path=$2} /^branch /{if ($2==b){print path; exit}}')
+
+  if [[ -n "$existing_path" ]]; then
+    echo "branch already checked out at $existing_path, opening there"
+    tmux new-window -n "$feature" -c "$existing_path" "${SHELL:-zsh}"
+    return 0
+  fi
+
+  # create the worktree on a fresh branch off latest base
+  mkdir -p "$(dirname "$worktree_path")"
+  echo "basing off $base_ref..."
+  git -C "$repo_root" fetch origin --quiet
+  git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base_ref" || return 1
+
+  # new tmux window: claude on the left, shell on the right
+  tmux new-window -n "$feature" -c "$worktree_path" \
+    "~/.claude/hooks/wt-claude.sh '$feature'"
+  tmux split-window -h -t "$feature" \
+    "~/.claude/hooks/wt-session.sh '$worktree_path' '$repo_root'"
+}
+
+# fzf dockerhub tags for a given image: latest <namespace/repo>
+latest() {
+  local image="$1"
+  [[ -z "$image" ]] && { echo "usage: latest <namespace/repo>"; return 1; }
+  local tag
+  tag=$(curl -s "https://hub.docker.com/v2/repositories/${image}/tags/?page_size=50&ordering=last_updated" \
+    | jq -r '.results[].name' \
+    | tac \
+    | fzf --tac --prompt="$image:" --header="select a tag")
+  [[ -z "$tag" ]] && return 1
+  echo -n "${image}:${tag}" | pbcopy
+  echo "copied: ${image}:${tag}"
+}
+
+# override plugin aliases (must be after plugin loading)
+alias gb="git branch --show-current"

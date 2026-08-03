@@ -1,0 +1,32 @@
+{
+    "diagnostic.checkCurrentLine": true,
+    "languageserver": {
+    "helm": {
+        "command": "helm_ls",
+        "args": ["serve"],
+        "filetypes": ["helm", "helmfile"],
+        "rootPatterns": ["Chart.yaml"],
+        "settings": {
+            "helm-ls": {
+                "yamlls": {
+                    "path": "yaml-language-server",
+                    "config": {
+                        "schemas": {
+                            "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/gateway.networking.k8s.io/httproute_v1.json": "glob:**/httproute*.yaml",
+                            "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/gateway.networking.k8s.io/gateway_v1.json": "glob:**/gateway*.yaml",
+                            "kubernetes": "*.yaml"
+                        },
+                        "validate": true,
+                        "completion": true,
+                        "hover": true,
+                        "schemaStore": {
+                            "enable": true
+                        }
+                    }
+                }
+            }
+        }
+    }
+  }
+}
+
