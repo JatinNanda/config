@@ -28,7 +28,23 @@ alias vg="vim +Git +only"
 alias vm="vim -c 'Git mergetool'"
 alias vf="vim -c 'Telescope find_files'"
 alias agv="vim -c 'Telescope live_grep'"
-alias cb="git branch --show-current | pbcopy"
+
+# cross-platform clipboard: macOS pbcopy, WSL clip.exe, Linux xclip/wl-copy
+copy() {
+  if command -v pbcopy >/dev/null 2>&1; then
+    pbcopy
+  elif command -v clip.exe >/dev/null 2>&1; then
+    clip.exe
+  elif command -v xclip >/dev/null 2>&1; then
+    xclip -selection clipboard
+  elif command -v wl-copy >/dev/null 2>&1; then
+    wl-copy
+  else
+    echo "copy: no clipboard tool found" >&2
+    cat >/dev/null
+  fi
+}
+alias cb="git branch --show-current | copy"
 
 # re-source dots
 alias sz="source ~/.zshrc"
@@ -132,7 +148,11 @@ cdw() {
 
 # search and replace across matching files
 sr() {
-    ag -l "$1" | xargs sed -i '' "s/$1/$2/g"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        ag -l "$1" | xargs sed -i '' "s/$1/$2/g"
+    else
+        ag -l "$1" | xargs sed -i "s/$1/$2/g"
+    fi
 }
 
 # fzf-clone a repo from an org (defaults to $GH_ORG, else your own repos)
@@ -345,7 +365,7 @@ latest() {
     | tac \
     | fzf --tac --prompt="$image:" --header="select a tag")
   [[ -z "$tag" ]] && return 1
-  echo -n "${image}:${tag}" | pbcopy
+  echo -n "${image}:${tag}" | copy
   echo "copied: ${image}:${tag}"
 }
 

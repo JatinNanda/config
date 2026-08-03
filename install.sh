@@ -24,7 +24,7 @@ clone_if_missing() {
   [ -d "$dst" ] || git clone --depth 1 "$url" "$dst"
 }
 
-# ---- Homebrew + packages ----------------------------------------------------
+# ---- Homebrew (macOS) / apt (Linux, incl. WSL) + packages -------------------
 if [ "$(uname)" = "Darwin" ]; then
   if ! command -v brew >/dev/null 2>&1; then
     log "Installing Homebrew"
@@ -33,8 +33,15 @@ if [ "$(uname)" = "Darwin" ]; then
   eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
   log "Installing Brewfile packages"
   brew bundle --file "$REPO/Brewfile"
+elif [ "$(uname)" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
+  log "Installing packages via apt"
+  sudo apt-get update
+  # node/yarn/pnpm come from nvm+corepack below, not apt, to match Brewfile's intent
+  for pkg in git gh zsh tmux neovim fzf silversearcher-ag jq golang-go; do
+    sudo apt-get install -y "$pkg" || warn "apt install $pkg failed (non-fatal)"
+  done
 else
-  warn "Not macOS — skipping Homebrew. Install git/zsh/tmux/neovim/fzf/ag/jq/go/node yourself."
+  warn "Unsupported OS — install git/zsh/tmux/neovim/fzf/ag/jq/go/node yourself."
 fi
 
 # ---- oh-my-zsh + plugins ----------------------------------------------------
@@ -86,12 +93,13 @@ if ! command -v cargo >/dev/null 2>&1 && [ ! -f "$HOME/.cargo/env" ]; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 fi
 
-if [ ! -d "$HOME/.nvm" ]; then
-  log "Installing nvm + Node LTS"
-  clone_if_missing https://github.com/nvm-sh/nvm "$HOME/.nvm"
-  export NVM_DIR="$HOME/.nvm"
-  . "$NVM_DIR/nvm.sh" && nvm install --lts
-fi
+log "Installing nvm + Node LTS"
+clone_if_missing https://github.com/nvm-sh/nvm "$HOME/.nvm"
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+command -v node >/dev/null 2>&1 || nvm install --lts
+command -v yarn >/dev/null 2>&1 || corepack enable 2>/dev/null || npm install -g yarn
+command -v pnpm >/dev/null 2>&1 || corepack enable 2>/dev/null || npm install -g pnpm
 
 if command -v go >/dev/null 2>&1; then
   log "Installing recon (tmux claude orchestrator)"
@@ -107,8 +115,14 @@ fi
 
 # ---- fonts ------------------------------------------------------------------
 log "Installing fonts"
-mkdir -p "$HOME/Library/Fonts"
-find "$REPO/fonts" -type f \( -name '*.ttf' -o -name '*.otf' \) -exec cp {} "$HOME/Library/Fonts/" \;
+if [ "$(uname)" = "Darwin" ]; then
+  FONT_DIR="$HOME/Library/Fonts"
+else
+  FONT_DIR="$HOME/.local/share/fonts"
+fi
+mkdir -p "$FONT_DIR"
+find "$REPO/fonts" -type f \( -name '*.ttf' -o -name '*.otf' \) -exec cp {} "$FONT_DIR/" \;
+command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$FONT_DIR" >/dev/null
 
 # ---- default shell ----------------------------------------------------------
 if [[ "$SHELL" != *zsh* ]] && command -v zsh >/dev/null 2>&1; then
@@ -116,10 +130,16 @@ if [[ "$SHELL" != *zsh* ]] && command -v zsh >/dev/null 2>&1; then
   chsh -s "$(command -v zsh)" || warn "chsh failed — run it manually"
 fi
 
-cat <<'DONE'
+if [ "$(uname)" = "Darwin" ]; then
+  TERM_STEP="iTerm2: import iterm/jatin.itermcolors and select the \"jatin\" profile."
+else
+  TERM_STEP="Fonts were installed on the Linux side only. On WSL, also copy fonts/Inconsolata/*.ttf into a Windows font dir (or double-click + Install) if you want them in Windows Terminal, then pick Inconsolata there."
+fi
+
+cat <<DONE
 
 Setup complete. Manual finishing touches:
-  1. iTerm2: import iterm/jatin.itermcolors and select the "jatin" profile.
+  1. $TERM_STEP
   2. tmux: start tmux, then press prefix (C-a) + I to install tmux plugins.
   3. Secrets/per-job env: put them in ~/.zshrc.local (untracked, auto-sourced).
   4. Restart your terminal.
