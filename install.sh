@@ -83,9 +83,11 @@ done
 
 link "$REPO/bin/wt-render" "$HOME/.local/bin/wt-render"
 link "$REPO/bin/wt-kill"   "$HOME/.local/bin/wt-kill"
+link "$REPO/bin/winterm-colors" "$HOME/.local/bin/winterm-colors"
 link "$REPO/zsh/jatin.zsh-theme" "$OMZ/themes/jatin.zsh-theme"
 
-chmod +x "$HOME"/.claude/hooks/* "$HOME/.local/bin/wt-render" "$HOME/.local/bin/wt-kill" 2>/dev/null
+chmod +x "$HOME"/.claude/hooks/* "$HOME/.local/bin/wt-render" "$HOME/.local/bin/wt-kill" \
+         "$HOME/.local/bin/winterm-colors" 2>/dev/null
 
 # ---- toolchains -------------------------------------------------------------
 if ! command -v cargo >/dev/null 2>&1 && [ ! -f "$HOME/.cargo/env" ]; then
@@ -124,6 +126,19 @@ mkdir -p "$FONT_DIR"
 find "$REPO/fonts" -type f \( -name '*.ttf' -o -name '*.otf' \) -exec cp {} "$FONT_DIR/" \;
 command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$FONT_DIR" >/dev/null
 
+# ---- terminal colors --------------------------------------------------------
+# On macOS the palette is imported into iTerm2 by hand. On WSL nothing was
+# applying it, so Windows Terminal kept its dark default (Campbell) and every
+# color the theme picks came out muddy.
+if grep -qi microsoft /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    log "Applying color palette to Windows Terminal"
+    "$REPO/bin/winterm-colors" || warn "winterm-colors failed (non-fatal)"
+  else
+    warn "python3 missing, skipping Windows Terminal palette"
+  fi
+fi
+
 # ---- default shell ----------------------------------------------------------
 if [[ "$SHELL" != *zsh* ]] && command -v zsh >/dev/null 2>&1; then
   log "Setting default shell to zsh"
@@ -133,7 +148,7 @@ fi
 if [ "$(uname)" = "Darwin" ]; then
   TERM_STEP="iTerm2: import iterm/jatin.itermcolors and select the \"jatin\" profile."
 else
-  TERM_STEP="Fonts were installed on the Linux side only. On WSL, also copy fonts/Inconsolata/*.ttf into a Windows font dir (or double-click + Install) if you want them in Windows Terminal, then pick Inconsolata there."
+  TERM_STEP="Colors were applied to Windows Terminal automatically. Fonts were installed on the Linux side only: on WSL, also copy fonts/Inconsolata/*.ttf into a Windows font dir (or double-click + Install) if you want them in Windows Terminal, then pick Inconsolata there."
 fi
 
 cat <<DONE

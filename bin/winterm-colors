@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Apply iterm/jatin.itermcolors to Windows Terminal (the WSL equivalent of
+importing the preset into iTerm2).
+
+Adds a "jatin" scheme to Windows Terminal's settings.json and selects it on
+every WSL profile. Idempotent. Backs up settings.json before writing.
+"""
+import glob
+import json
+import os
+import plistlib
+import re
+import shutil
+import sys
+import time
+
+SCHEME = "jatin"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PRESET = os.path.join(REPO, "iterm", "jatin.itermcolors")
+
+# Windows Terminal scheme key <- "Ansi N Color" index in the iTerm preset.
+ANSI = [
+    ("black", 0), ("red", 1), ("green", 2), ("yellow", 3),
+    ("blue", 4), ("purple", 5), ("cyan", 6), ("white", 7),
+    ("brightBlack", 8), ("brightRed", 9), ("brightGreen", 10), ("brightYellow", 11),
+    ("brightBlue", 12), ("brightPurple", 13), ("brightCyan", 14), ("brightWhite", 15),
+]
+SINGLES = [
+    ("background", "Background Color"),
+    ("foreground", "Foreground Color"),
+    ("cursorColor", "Cursor Color"),
+    ("selectionBackground", "Selection Color"),
+]
+
+WSL_SOURCES = ("Microsoft.WSL", "Windows.Terminal.Wsl", "CanonicalGroupLimited")
+
+
+def die(msg):
+    sys.exit("winterm-colors: %s" % msg)
+
+
+def to_hex(c):
+    def chan(name):
+        v = float(c.get(name, 0))
+        # iTerm writes 0..1 floats; older presets sometimes use 0..255.
+        if v > 1.0:
+            v /= 255.0
+        return max(0, min(255, round(v * 255)))
+    return "#%02x%02x%02x" % (
+        chan("Red Component"), chan("Green Component"), chan("Blue Component"))
+
+
+def build_scheme():
+    with open(PRESET, "rb") as fh:
+        preset = plistlib.load(fh)
+    scheme = {"name": SCHEME}
+    for key, idx in ANSI:
+        src = "Ansi %d Color" % idx
+        if src not in preset:
+            die("%s missing %s" % (PRESET, src))
+        scheme[key] = to_hex(preset[src])
+    for key, src in SINGLES:
+        if src in preset:
+            scheme[key] = to_hex(preset[src])
+    return scheme
+
+
+def find_settings():
+    if os.environ.get("WT_SETTINGS"):
+        return os.environ["WT_SETTINGS"]
+    patterns = [
+        "/mnt/*/Users/*/AppData/Local/Packages/Microsoft.WindowsTerminal*/LocalState/settings.json",
+        "/mnt/*/Users/*/AppData/Local/Microsoft/Windows Terminal/settings.json",
+    ]
+    hits = sorted({p for pat in patterns for p in glob.glob(pat)})
+    if not hits:
+        die("no Windows Terminal settings.json found (set WT_SETTINGS to override)")
+    # Prefer the Windows user whose name matches this Linux user.
+    user = os.environ.get("USER", "")
+    mine = [p for p in hits if "/Users/%s/" % user in p]
+    if len(mine) == 1:
+        return mine[0]
+    if len(hits) == 1:
+        return hits[0]
+    die("multiple settings.json candidates, set WT_SETTINGS to pick one:\n  "
+        + "\n  ".join(mine or hits))
+
+
+def load_jsonc(text):
+    """Windows Terminal tolerates // comments and trailing commas; json does not."""
+    try:
+        return json.loads(text), False
+    except ValueError:
+        pass
+    stripped = re.sub(r'("(?:[^"\\]|\\.)*")|//[^\n]*', lambda m: m.group(1) or "", text)
+    stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
+    return json.loads(stripped), True
+
+
+def main():
+    if not os.path.exists(PRESET):
+        die("missing preset %s" % PRESET)
+    scheme = build_scheme()
+    path = find_settings()
+
+    with open(path, "r", encoding="utf-8-sig") as fh:
+        raw = fh.read()
+    settings, lossy = load_jsonc(raw)
+
+    schemes = settings.setdefault("schemes", [])
+    if not isinstance(schemes, list):
+        die('"schemes" is not a list in %s' % path)
+    for i, existing in enumerate(schemes):
+        if isinstance(existing, dict) and existing.get("name") == SCHEME:
+            schemes[i] = scheme
+            break
+    else:
+        schemes.append(scheme)
+
+    # profiles.defaults, not just the WSL profile: launching WT on its default
+    # profile and running `wsl` from there keeps the *launching* profile's
+    # colors, so a WSL-only scheme silently does nothing.
+    prof_root = settings.setdefault("profiles", {})
+    if isinstance(prof_root, list):  # legacy top-level-array form
+        prof_root = {"list": prof_root}
+        settings["profiles"] = prof_root
+    prof_root.setdefault("defaults", {})["colorScheme"] = SCHEME
+
+    profiles = prof_root.get("list") or []
+    targeted = ["(all profiles via defaults)"]
+    for prof in profiles:
+        if not isinstance(prof, dict):
+            continue
+        source = prof.get("source", "")
+        name = prof.get("name", "")
+        is_wsl = any(s in source for s in WSL_SOURCES) or "wsl" in name.lower()
+        if is_wsl:
+            prof["colorScheme"] = SCHEME
+            targeted.append(name or prof.get("guid", "?"))
+
+    backup = "%s.bak.%d" % (path, int(time.time()))
+    # copyfile, not copy2: DrvFs rejects the metadata copy copy2 does.
+    shutil.copyfile(path, backup)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(settings, fh, indent=4, ensure_ascii=False)
+        fh.write("\n")
+
+    print("winterm-colors: applied scheme %r to %s" % (SCHEME, path))
+    print("  backup: %s" % backup)
+    if lossy:
+        print("  note: comments in settings.json were dropped while reformatting")
+    if targeted:
+        print("  profiles set: %s" % ", ".join(targeted))
+    else:
+        print("  no WSL profile found; pick the %r scheme manually in Settings"
+              % SCHEME)
+
+
+if __name__ == "__main__":
+    main()

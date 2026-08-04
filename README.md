@@ -19,9 +19,9 @@ cd ~/code/config
 | `home/`           | `~/.zshrc`, `~/.bash_profile`, `~/.profile`, `~/.zshenv`, `~/.zprofile`, `~/.gitconfig`, `~/.tmux.conf`, `~/.vimrc` |
 | `nvim/`           | `~/.config/nvim/` |
 | `claude/`         | `~/.claude/` (CLAUDE.md, settings.json, keybindings.json, hooks/) |
-| `bin/`            | `~/.local/bin/` (worktree helpers) |
+| `bin/`            | `~/.local/bin/` (worktree helpers, `winterm-colors`) |
 | `zsh/`            | oh-my-zsh theme |
-| `iterm/`          | iTerm2 color preset (imported manually) |
+| `iterm/`          | color palette. Source of truth for both terminals: imported by hand into iTerm2 on macOS, applied to Windows Terminal on WSL by `bin/winterm-colors` |
 | `fonts/`          | copied to `~/Library/Fonts` |
 
 Because everything is symlinked, editing a config on the machine edits the repo directly. Commit and push to sync; no export step.

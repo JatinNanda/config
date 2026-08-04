@@ -40,9 +40,9 @@ prompt_context() {
         git_project=$(git rev-parse --show-toplevel)
         if [[ -n "$git_project" ]]; then
             project=$(basename $git_project)
-            prompt_segment 98 260 " ${project} "
+            prompt_segment magenta black " ${project} "
         else
-            prompt_segment 98 260 " ??? "
+            prompt_segment magenta black " ??? "
         fi
     fi
 }
@@ -84,7 +84,7 @@ prompt_git() {
             shortref=$(shorten_git $ref)
             ref="$DETACHED ${shortref/.../}"
         fi
-        prompt_segment $color 235
+        prompt_segment $color black
         print -n " $ref "
     fi
 }
@@ -102,8 +102,7 @@ prompt_dir() {
 # Virtual env
 prompt_virtualenv() {
   if [[ -n $VIRTUAL_ENV ]]; then
-    color=cyan
-    prompt_segment 96 260
+    prompt_segment magenta black
     print -Pn " $(basename $VIRTUAL_ENV) "
   fi
 }

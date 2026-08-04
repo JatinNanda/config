@@ -216,8 +216,8 @@ let g:tmuxline_preset = {
       \'a'    : '#S',
       \'b'    : '#[fg=colour255]#(~/.tmux/spotify.sh)',
       \'c'    : '#(~/.tmux/weather.sh)',
-      \'win'  : '#I #W#{?@claude_pending, #[fg=colour208]✳#[default],}',
-      \'cwin' : '#I #W#{?@claude_pending, #[fg=colour208]✳#[fg=colour231]#[bold],}',
+      \'win'  : '#I #W#{?@claude_pending, #[fg=colour208]✱#[default],}',
+      \'cwin' : '#I #W#{?@claude_pending, #[fg=colour208]✱#[fg=colour231]#[bold],}',
       \'x'    : '%A, %B %e %Y',
       \'y'    : '%I:%M:%S %p',
       \'z'    : '#(whoami)'}
