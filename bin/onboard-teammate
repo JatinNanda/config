@@ -1,0 +1,279 @@
+#!/bin/bash
+# onboard-teammate
+#
+# Grants a new teammate access to the three systems we hand out by
+# hand: the accrual-dev GitHub org, Arc, and the tailnet.
+#
+# Run me when: someone joins and you have their email + GitHub handle.
+#
+# Usage:
+#   onboard-teammate --email <email> --github <username> [options]
+#
+#   --teams a,b     GitHub teams to add them to (default: humans,builders)
+#   --role member   GitHub org role: member | admin (default: member)
+#   --skip x,y      Systems to skip: github, arc, tailscale
+#   --apply         Actually do it. Without this you get a dry run.
+#
+# Prereqs:
+#   - gh authed with admin:org (`gh auth refresh -s admin:org`)
+#   - arc CLI on PATH and authed (`arc auth`)
+#   - TAILSCALE_API_KEY, or TAILSCALE_OAUTH_CLIENT_ID /
+#     TAILSCALE_OAUTH_CLIENT_SECRET for an OAuth client scoped to write
+#     users. Either way the credential needs owner or admin rights on
+#     the tailnet. The devbox client that
+#     arc/scripts/runtime/mint-tailscale-key.ts uses is scoped to
+#     auth_keys only and will 403 here.
+#
+# What it does, per system, skipping anything already in place:
+#   1. GitHub: org invite, then adds to each --teams slug
+#   2. Arc:    adds the email as a guest user
+#   3. Tailnet: creates a user invite, prints the invite URL
+#
+# Each system is independent. A failure in one is reported and the rest
+# still run; the exit code is nonzero if anything failed.
+#
+# Out of scope:
+#   - AWS access. Identity Center users/groups are Terraform-managed in
+#     infrastructure/terraform/production/identity.tf — add them there
+#     and let Spacelift apply it, don't click-ops it.
+#   - Removing access. Offboarding is its own path.
+
+set -euo pipefail
+
+ORG="accrual-dev"
+TAILNET="-" # "-" means the default tailnet for the OAuth client
+
+EMAIL=""
+GITHUB_USER=""
+TEAMS="humans,builders"
+ORG_ROLE="member"
+SKIP=""
+APPLY=0
+
+log() { echo "[$(date '+%H:%M:%S')] onboard: $*"; }
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+# Collected as "system\tstatus\tdetail" for the closing summary.
+RESULTS=()
+FAILED=0
+record() {
+    RESULTS+=("$1|$2|$3")
+    [ "$2" = "FAILED" ] && FAILED=1
+    return 0
+}
+
+skipped() { [[ ",${SKIP}," == *",$1,"* ]]; }
+
+# ── Args ────────────────────────────────────────────────────────────
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --email) EMAIL="${2:-}"; shift 2 ;;
+        --github) GITHUB_USER="${2:-}"; shift 2 ;;
+        --teams) TEAMS="${2:-}"; shift 2 ;;
+        --role) ORG_ROLE="${2:-}"; shift 2 ;;
+        --skip) SKIP="${2:-}"; shift 2 ;;
+        --apply) APPLY=1; shift ;;
+        -h | --help)
+            sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+
+[ -n "$EMAIL" ] || die "--email is required"
+[ -n "$GITHUB_USER" ] || die "--github is required"
+[[ "$EMAIL" == *@*.* ]] || die "--email doesn't look like an email: $EMAIL"
+[[ "$GITHUB_USER" =~ ^[A-Za-z0-9-]+$ ]] || die "--github isn't a valid handle: $GITHUB_USER"
+[[ "$ORG_ROLE" == "member" || "$ORG_ROLE" == "admin" ]] || die "--role must be member or admin"
+
+# ── Pre-flight ──────────────────────────────────────────────────────
+
+command -v jq >/dev/null 2>&1 || die "jq not on PATH"
+
+if ! skipped github; then
+    command -v gh >/dev/null 2>&1 || die "gh not on PATH"
+    gh auth status >/dev/null 2>&1 || die "gh not authenticated; run: gh auth login"
+    # The org membership endpoints 403 without admin:org, and gh surfaces
+    # that as a generic HTTP 403 well after we've started making changes.
+    if ! gh auth status 2>&1 | grep -q "admin:org"; then
+        die "gh token lacks admin:org; run: gh auth refresh -h github.com -s admin:org"
+    fi
+    IFS=',' read -ra TEAM_LIST <<<"$TEAMS"
+    for team in "${TEAM_LIST[@]}"; do
+        [ -n "$team" ] || continue
+        gh api "orgs/${ORG}/teams/${team}" >/dev/null 2>&1 ||
+            die "no such team in ${ORG}: ${team}"
+    done
+fi
+
+if ! skipped arc; then
+    command -v arc >/dev/null 2>&1 || die "arc not on PATH (expected ~/.arc/bin/arc)"
+    arc users get-me >/dev/null 2>&1 || die "arc not authenticated; run: arc auth"
+fi
+
+if ! skipped tailscale && [ -z "${TAILSCALE_API_KEY:-}" ]; then
+    [ -n "${TAILSCALE_OAUTH_CLIENT_ID:-}" ] ||
+        die "set TAILSCALE_API_KEY, or TAILSCALE_OAUTH_CLIENT_ID and _SECRET (or pass --skip tailscale)"
+    [ -n "${TAILSCALE_OAUTH_CLIENT_SECRET:-}" ] ||
+        die "TAILSCALE_OAUTH_CLIENT_SECRET not set (or pass --skip tailscale)"
+fi
+
+if [ "$APPLY" -eq 0 ]; then
+    log "DRY RUN — nothing will be changed. Re-run with --apply."
+fi
+log "email=${EMAIL} github=${GITHUB_USER} teams=${TEAMS} role=${ORG_ROLE}"
+
+# ── GitHub ──────────────────────────────────────────────────────────
+
+do_github() {
+    local state
+    state=$(gh api "orgs/${ORG}/memberships/${GITHUB_USER}" --jq '.state' 2>/dev/null || echo "none")
+
+    if [ "$state" = "active" ]; then
+        log "github: ${GITHUB_USER} is already an active member"
+        record "github org" "SKIPPED" "already a member"
+    elif [ "$state" = "pending" ]; then
+        log "github: ${GITHUB_USER} already has a pending invite"
+        record "github org" "SKIPPED" "invite already pending"
+    elif [ "$APPLY" -eq 0 ]; then
+        log "github: would invite ${GITHUB_USER} as ${ORG_ROLE}"
+        record "github org" "DRY RUN" "would invite as ${ORG_ROLE}"
+    else
+        if gh api --method PUT "orgs/${ORG}/memberships/${GITHUB_USER}" \
+            -f "role=${ORG_ROLE}" >/dev/null 2>&1; then
+            log "github: invited ${GITHUB_USER} as ${ORG_ROLE}"
+            record "github org" "OK" "invited as ${ORG_ROLE}"
+        else
+            log "github: FAILED to invite ${GITHUB_USER}"
+            record "github org" "FAILED" "invite call failed"
+            return 0
+        fi
+    fi
+
+    # Team adds work on pending members, so this runs even for a fresh invite.
+    local team
+    for team in "${TEAM_LIST[@]}"; do
+        [ -n "$team" ] || continue
+        local tstate
+        tstate=$(gh api "orgs/${ORG}/teams/${team}/memberships/${GITHUB_USER}" \
+            --jq '.state' 2>/dev/null || echo "none")
+        if [ "$tstate" = "active" ]; then
+            log "github: already on team ${team}"
+            record "team ${team}" "SKIPPED" "already a member"
+        elif [ "$APPLY" -eq 0 ]; then
+            log "github: would add to team ${team}"
+            record "team ${team}" "DRY RUN" "would add"
+        elif gh api --method PUT "orgs/${ORG}/teams/${team}/memberships/${GITHUB_USER}" \
+            -f role=member >/dev/null 2>&1; then
+            log "github: added to team ${team}"
+            record "team ${team}" "OK" "added"
+        else
+            log "github: FAILED to add to team ${team}"
+            record "team ${team}" "FAILED" "team add failed"
+        fi
+    done
+}
+
+# ── Arc ─────────────────────────────────────────────────────────────
+
+do_arc() {
+    if arc guest-users list --compact 2>/dev/null | jq -e \
+        --arg e "$EMAIL" 'if type == "array" then . else (.results // .data // .items // []) end
+                          | any(.email == $e)' >/dev/null 2>&1; then
+        log "arc: ${EMAIL} already present"
+        record "arc" "SKIPPED" "already a guest user"
+        return 0
+    fi
+
+    if [ "$APPLY" -eq 0 ]; then
+        log "arc: would add guest user ${EMAIL}"
+        record "arc" "DRY RUN" "would add guest user"
+        return 0
+    fi
+
+    if arc guest-users add --email "$EMAIL" >/dev/null 2>&1; then
+        log "arc: added ${EMAIL}"
+        record "arc" "OK" "guest user added"
+    else
+        log "arc: FAILED to add ${EMAIL}"
+        record "arc" "FAILED" "guest-users add failed"
+    fi
+}
+
+# ── Tailscale ───────────────────────────────────────────────────────
+
+ts_token() {
+    if [ -n "${TAILSCALE_API_KEY:-}" ]; then
+        echo "$TAILSCALE_API_KEY"
+        return 0
+    fi
+    curl -sf -X POST "https://api.tailscale.com/api/v2/oauth/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "client_id=${TAILSCALE_OAUTH_CLIENT_ID}" \
+        -d "client_secret=${TAILSCALE_OAUTH_CLIENT_SECRET}" \
+        -d "grant_type=client_credentials" | jq -r '.access_token // empty'
+}
+
+do_tailscale() {
+    local token
+    token=$(ts_token) || true
+    if [ -z "$token" ]; then
+        log "tailscale: FAILED to get an OAuth token"
+        record "tailscale" "FAILED" "OAuth token exchange failed"
+        return 0
+    fi
+
+    if curl -sf -H "Authorization: Bearer ${token}" \
+        "https://api.tailscale.com/api/v2/tailnet/${TAILNET}/user-invites" |
+        jq -e --arg e "$EMAIL" 'any(.[]; .email == $e)' >/dev/null 2>&1; then
+        log "tailscale: ${EMAIL} already has an open invite"
+        record "tailscale" "SKIPPED" "invite already open"
+        return 0
+    fi
+
+    if [ "$APPLY" -eq 0 ]; then
+        log "tailscale: would invite ${EMAIL} as member"
+        record "tailscale" "DRY RUN" "would create user invite"
+        return 0
+    fi
+
+    local resp
+    resp=$(curl -sf -X POST \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "[{\"role\":\"member\",\"email\":\"${EMAIL}\"}]" \
+        "https://api.tailscale.com/api/v2/tailnet/${TAILNET}/user-invites") || {
+        log "tailscale: FAILED to create invite"
+        record "tailscale" "FAILED" "user-invites call failed"
+        return 0
+    }
+
+    local url
+    url=$(echo "$resp" | jq -r 'if type == "array" then .[0] else . end | .inviteUrl // empty')
+    log "tailscale: invited ${EMAIL}"
+    record "tailscale" "OK" "${url:-invite created}"
+}
+
+# ── Run ─────────────────────────────────────────────────────────────
+
+skipped github || do_github
+skipped arc || do_arc
+skipped tailscale || do_tailscale
+
+echo
+echo "── Summary for ${EMAIL} (${GITHUB_USER}) ──"
+printf '%s\n' "${RESULTS[@]}" | column -t -s '|'
+echo
+
+if [ "$APPLY" -eq 0 ]; then
+    log "dry run only. Re-run with --apply to execute."
+elif [ "$FAILED" -eq 1 ]; then
+    log "one or more systems failed; see summary above"
+fi
+
+exit "$FAILED"

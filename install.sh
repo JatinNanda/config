@@ -80,14 +80,24 @@ link "$REPO/claude/keybindings.json" "$HOME/.claude/keybindings.json"
 for h in "$REPO"/claude/hooks/*; do
   link "$h" "$HOME/.claude/hooks/$(basename "$h")"
 done
+mkdir -p "$HOME/.claude/skills"
+for s in "$REPO"/claude/skills/*; do
+  link "$s" "$HOME/.claude/skills/$(basename "$s")"
+done
 
 link "$REPO/bin/wt-render" "$HOME/.local/bin/wt-render"
 link "$REPO/bin/wt-kill"   "$HOME/.local/bin/wt-kill"
 link "$REPO/bin/winterm-colors" "$HOME/.local/bin/winterm-colors"
+link "$REPO/bin/wsl-browser" "$HOME/.local/bin/wsl-browser"
+link "$REPO/bin/onboard-teammate" "$HOME/.local/bin/onboard-teammate"
+link "$REPO/bin/tmux-resurrect-guard" "$HOME/.local/bin/tmux-resurrect-guard"
 link "$REPO/zsh/jatin.zsh-theme" "$OMZ/themes/jatin.zsh-theme"
 
-chmod +x "$HOME"/.claude/hooks/* "$HOME/.local/bin/wt-render" "$HOME/.local/bin/wt-kill" \
-         "$HOME/.local/bin/winterm-colors" 2>/dev/null
+chmod +x "$HOME"/.claude/hooks/* "$REPO"/claude/skills/*/scripts/* \
+         "$HOME/.local/bin/wt-render" "$HOME/.local/bin/wt-kill" \
+         "$HOME/.local/bin/winterm-colors" "$HOME/.local/bin/wsl-browser" \
+         "$HOME/.local/bin/onboard-teammate" \
+         "$HOME/.local/bin/tmux-resurrect-guard" 2>/dev/null
 
 # ---- toolchains -------------------------------------------------------------
 if ! command -v cargo >/dev/null 2>&1 && [ ! -f "$HOME/.cargo/env" ]; then

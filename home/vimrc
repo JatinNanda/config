@@ -218,7 +218,7 @@ let g:tmuxline_preset = {
       \'c'    : '#(~/.tmux/weather.sh)',
       \'win'  : '#I #W#{?@claude_pending, #[fg=colour208]✱#[default],}',
       \'cwin' : '#I #W#{?@claude_pending, #[fg=colour208]✱#[fg=colour231]#[bold],}',
-      \'x'    : '%A, %B %e %Y',
+      \'x'    : '#(~/.tmux/plugins/tmux-continuum/scripts/continuum_save.sh)%A, %B %e %Y',
       \'y'    : '%I:%M:%S %p',
       \'z'    : '#(whoami)'}
 
@@ -345,6 +345,17 @@ nnoremap fg <cmd>Telescope live_grep<cr>
 nnoremap fb <cmd>Telescope buffers<cr>
 nnoremap fh <cmd>Telescope help_tags<cr>
 
+lua << EOF
+require('telescope').setup({
+  defaults = {
+    initial_mode = 'normal',
+    sorting_strategy = 'ascending',
+    layout_strategy = 'horizontal',
+    layout_config = { prompt_position = 'top' },
+  },
+})
+EOF
+
 " reload vimrc
 augroup myvimrc
     au!
@@ -352,7 +363,7 @@ augroup myvimrc
 augroup END
 
 lua << EOF
-require('lspconfig').yamlls.setup({
+vim.lsp.config('yamlls', {
   filetypes = { "yaml", "yaml.docker-compose" },  -- exclude "helm" filetype
   on_attach = function(client, bufnr)
     -- Detach yamlls if the file is in a helm templates directory
@@ -379,10 +390,9 @@ require('lspconfig').yamlls.setup({
     }
   }
 })
-EOF
+vim.lsp.enable('yamlls')
 
-lua << EOF
-require('lspconfig').taplo.setup({})
+vim.lsp.enable('taplo')
 EOF
 
 
