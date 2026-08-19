@@ -47,6 +47,7 @@ When in doubt, leave it out. Under-documenting is the correct failure mode here.
 
 ## PR Behavior
 
+- Whenever a PR is mentioned, write it as a full clickable URL (`https://github.com/<org>/<repo>/pull/<number>`), never a bare `#123`, `PR 123`, or plain number. This applies everywhere: chat replies, summaries, commit messages, and PR bodies. The same goes for a PR that was just created, and for any PR referred to later in the conversation.
 - Create PRs as drafts (`--draft`) unless told otherwise. Draft is what makes opening one the safe default: it is somewhere to put the work, not a request for review.
 - Check for a PR template (`.github/pull_request_template.md` or `.github/PULL_REQUEST_TEMPLATE/*.md`) and fill in all sections based on the changes.
 - Write a real PR description. If the diff renders misleadingly (moved code showing up as unchanged context, for example), show the before and after in the body.
