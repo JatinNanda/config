@@ -9,6 +9,7 @@ Two audiences, two rules. They are not negotiable and they come from CLAUDE.md:
 
 - **Bot comments**: never reply. Fix the issue if it is legitimate; leave the code alone if it is not. Resolve the thread either way.
 - **Human comments**: fix the issue if it makes sense. Never reply, never resolve. The user answers their own reviewers.
+- **Your own comments** (`kind: "mine"`): ignore them. Jatin's comments on his own PRs are context written for the reviewer, not feedback to act on. No fix, no reply, no resolve, and they never count toward the human total. A thread he started counts as human only once a real reviewer replies in it.
 
 Anything ambiguous is human.
 
@@ -61,7 +62,30 @@ Top-level PR comments from bots (CI summaries, coverage reports) are not review 
 
 Fix what makes sense, exactly as above. Then stop: leave the thread open and unanswered. If you decided against a human's suggestion, do not argue it on the PR, tell the user in chat so they can reply themselves.
 
-## 6. Commit and report
+## 6. Get the tests green
+
+Every fix you made has to survive the PR's own test suite. Do not push red.
+
+Work the smallest suite that covers the change and widen only if it stays green. In `accrual-dev/epsilon` that means:
+
+```bash
+pnpm --filter <package> exec vitest run <path/to/file.test.ts>   # one file, while iterating
+pnpm test:api-srv:workflow-tests                                  # Temporal workflow projects
+pnpm test:api-srv                                                 # full api-srv, slowest
+```
+
+Then loop: run, read the first real failure, fix it, run again. Keep going while each pass is making progress.
+
+Stop and report instead of looping when:
+
+- The same failure survives three attempts. You are guessing; say so and hand it back.
+- A test fails on `main` too. Pre-existing breakage is not yours to fix inside a comment-resolution pass, so confirm against the base branch before assuming your change caused it.
+- The suite cannot run at all: dependencies will not install, a database or other service is missing, credentials are absent. Say plainly which suite could not run and why, and do not claim the fix is verified.
+- Getting green would mean editing the test to match the code rather than the other way round. Never loosen an assertion to force a pass; that is a finding to report, not a fix to apply.
+
+"Within reason" is the governing phrase: a handful of focused iterations, not an open-ended grind. If deps alone take many minutes, run the narrowest suite that proves the change and say what you skipped.
+
+## 7. Commit and report
 
 Commit the fixes to the PR branch and push. Follow the usual commit rules from CLAUDE.md.
 
@@ -70,6 +94,7 @@ Then report per PR:
 - bot threads fixed, with a one-line description of each fix
 - bot threads resolved without a change, and why
 - human threads you fixed, left open, and what the user may want to say back
+- which test suites you ran and their result, or plainly which ones you could not run and why
 - anything you skipped and the reason
 - the PR URL
 

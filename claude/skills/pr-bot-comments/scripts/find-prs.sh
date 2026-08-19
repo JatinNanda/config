@@ -3,6 +3,7 @@
 # Usage: find-prs.sh [extra search qualifiers, e.g. "repo:owner/name" or "author:someone"]
 set -euo pipefail
 
+ME=$(gh api user -q .login)
 QUALIFIERS="${*:-}"
 QUERY="is:pr is:open author:@me ${QUALIFIERS}"
 
@@ -16,14 +17,15 @@ query($q:String!){
         reviewThreads(first:100){
           nodes{
             isResolved isOutdated
-            comments(first:1){nodes{author{login __typename}}}
+            comments(first:10){nodes{author{login __typename}}}
           }
         }
       }
     }
   }
-}' | jq -r '
+}' | jq -r --arg me "$ME" '
   def is_bot: (.__typename? // "") == "Bot" or ((.login? // "") | test("\\[bot\\]$|^(coderabbitai|greptile|sonarcloud|codecov|copilot|sentry|dependabot)"; "i"));
+  def reviewers: [ .comments.nodes[].author | select(is_bot | not) | select((.login // "") != $me) ] | length;
   [ .data.search.nodes[] | select(.number)
     | . as $pr
     | ($pr.reviewThreads.nodes | map(select(.isResolved == false))) as $open
@@ -34,7 +36,7 @@ query($q:String!){
         url: $pr.url,
         draft: $pr.isDraft,
         bot: ($open | map(select(.comments.nodes[0].author | is_bot)) | length),
-        human: ($open | map(select(.comments.nodes[0].author | is_bot | not)) | length)
+        human: ($open | map(select((.comments.nodes[0].author | is_bot) | not) | select(reviewers > 0)) | length)
       }
   ]
   | map(select(.bot + .human > 0))

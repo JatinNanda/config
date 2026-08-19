@@ -6,6 +6,7 @@ set -euo pipefail
 OWNER="${1%%/*}"
 REPO="${1##*/}"
 PR="$2"
+ME=$(gh api user -q .login)
 
 gh api graphql -F owner="$OWNER" -F repo="$REPO" -F pr="$PR" -f query='
 query($owner:String!,$repo:String!,$pr:Int!){
@@ -21,14 +22,15 @@ query($owner:String!,$repo:String!,$pr:Int!){
       }
     }
   }
-}' | jq '
+}' | jq --arg me "$ME" '
   def is_bot: (.__typename? // "") == "Bot" or ((.login? // "") | test("\\[bot\\]$|^(coderabbitai|greptile|sonarcloud|codecov|copilot|sentry|dependabot)"; "i"));
+  def reviewers: [ .comments.nodes[].author | select(is_bot | not) | select((.login // "") != $me) ] | length;
   [ .data.repository.pullRequest.reviewThreads.nodes[]
     | select(.isResolved == false)
     | {
         threadId: .id,
         author: (.comments.nodes[0].author.login // "unknown"),
-        kind: (if (.comments.nodes[0].author | is_bot) then "bot" else "human" end),
+        kind: (if (.comments.nodes[0].author | is_bot) then "bot" elif reviewers > 0 then "human" else "mine" end),
         path: .path,
         line: .line,
         outdated: .isOutdated,
