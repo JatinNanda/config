@@ -24,7 +24,7 @@ set -euo pipefail
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 STAGING=""
 
-cleanup() { [ -n "$STAGING" ] && rm -rf "$STAGING"; }
+cleanup() { [ -n "$STAGING" ] && rm -rf "$STAGING"; return 0; }
 trap cleanup EXIT
 
 die() {
