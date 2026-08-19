@@ -32,6 +32,8 @@ if [ "$(uname)" = "Darwin" ]; then
   fi
   eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"
   log "Installing Brewfile packages"
+  brew tap spacelift-io/spacelift >/dev/null 2>&1 || true
+  brew trust spacelift-io/spacelift >/dev/null 2>&1 || true
   brew bundle --file "$REPO/Brewfile"
 elif [ "$(uname)" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
   log "Installing packages via apt"
