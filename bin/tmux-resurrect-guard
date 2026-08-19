@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+dir="$(tmux show-option -gqv @resurrect-dir 2>/dev/null || true)"
+dir="${dir//\$HOME/$HOME}"
+dir="${dir/#\~/$HOME}"
+[ -n "$dir" ] || dir="${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect"
+[ -d "$dir" ] || exit 0
+
+find "$dir" -maxdepth 1 -name 'tmux_resurrect_*.txt' -size 0 -delete
+
+while IFS= read -r f; do
+	grep -q '^pane' "$f" || continue
+
+	if ! awk 'prev == $0 { exit 1 } { prev = $0 }' "$f"; then
+		tmp="$(mktemp "$dir/.guard.XXXXXX")"
+		awk 'prev != $0 { print } { prev = $0 }' "$f" >"$tmp" &&
+			chmod --reference="$f" "$tmp" 2>/dev/null
+		mv -f "$tmp" "$f"
+	fi
+
+	ln -sfn "$(basename "$f")" "$dir/last"
+	exit 0
+done < <(ls -t "$dir"/tmux_resurrect_*.txt 2>/dev/null)

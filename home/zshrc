@@ -26,8 +26,8 @@ alias tls="tmux list-sessions"
 alias at="tmux attach-session -t $1"
 alias vg="vim +Git +only"
 alias vm="vim -c 'Git mergetool'"
-alias vf="vim -c 'Telescope find_files'"
-alias agv="vim -c 'Telescope live_grep'"
+alias vf="vim -c 'autocmd VimEnter * ++once Telescope find_files'"
+alias agv="vim -c 'autocmd VimEnter * ++once Telescope live_grep'"
 
 # cross-platform clipboard: macOS pbcopy, WSL clip.exe, Linux xclip/wl-copy
 copy() {
@@ -371,3 +371,18 @@ latest() {
 
 # override plugin aliases (must be after plugin loading)
 alias gb="git branch --show-current"
+
+# ---- startup directory ------------------------------------------------------
+# Start in the project root rather than wherever the terminal dropped us (WSL
+# opens shells in the Windows home, which is also the slow 9p mount). Only fires
+# when the shell starts somewhere we didn't pick, so tmux windows and wt
+# worktrees keep the cwd they were opened with.
+if [[ -o interactive && -d "$HOME/code" ]] && [[ "$PWD" == "$HOME" || "$PWD" == /mnt/* ]]; then
+    cd "$HOME/code"
+fi
+
+export PATH="$HOME/.arc/bin:$PATH"
+
+# WSL has no native URL handler, so tools that shell out to a browser (aws sso
+# login, gh auth) fail on `gio open`. Python's webbrowser honors $BROWSER.
+export BROWSER="wsl-browser"

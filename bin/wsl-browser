@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Hand URLs to the Windows-side browser; WSL has no native handler.
+#
+# Start-Process takes the URL as one argument. `cmd /c start` cannot: the quotes
+# are lost in the WSL-to-cmd translation, so cmd splits query strings on every
+# `&`. Invoking chrome.exe directly fails differently again, returning 0 while
+# its detached child is reaped. powershell needs a Windows-side cwd or it warns
+# that UNC paths are unsupported.
+url=${1//\'/\'\'} # '' is the PowerShell single-quote escape
+cd /mnt/c || exit 1
+exec /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe \
+  -NoProfile -NonInteractive -Command "Start-Process '$url'"
