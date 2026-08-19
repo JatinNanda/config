@@ -9,6 +9,7 @@ cleanup() {
   _cleaned=1
   git -C "$REPO_ROOT" worktree remove --force "$WORKTREE_PATH" 2>/dev/null
   git -C "$REPO_ROOT" worktree prune 2>/dev/null
+  [[ -n "$WORKTREE_PATH" && -d "$WORKTREE_PATH" ]] && rm -rf -- "$WORKTREE_PATH"
 }
 
 trap cleanup EXIT SIGHUP SIGTERM

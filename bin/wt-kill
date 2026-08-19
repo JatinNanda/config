@@ -34,11 +34,18 @@ for wt in "${targets[@]}"; do
     if [[ -n $TMUX ]]; then
         win=$(tmux list-windows -F '#{window_id} #{pane_current_path}' 2>/dev/null \
               | awk -v p="$wt" '$2==p || index($2, p"/")==1 {print $1; exit}')
-        [[ -n $win ]] && tmux kill-window -t "$win" 2>/dev/null
+        if [[ -n $win ]]; then
+            tmux kill-window -t "$win" 2>/dev/null
+            for _ in {1..50}; do
+                tmux list-windows -F '#{window_id}' 2>/dev/null | grep -qx -- "$win" || break
+                sleep 0.1
+            done
+        fi
     fi
     git -C "$main" worktree remove --force "$wt" >/dev/null 2>&1
     git -C "$main" worktree prune >/dev/null 2>&1
     [[ -n $branch ]] && git -C "$main" branch -D "$branch" >/dev/null 2>&1
+    [[ -n $wt && -d $wt ]] && rm -rf -- "$wt"
     print "killed ${wt:t}"
 done
 exit 0
