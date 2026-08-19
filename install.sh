@@ -91,13 +91,15 @@ link "$REPO/bin/winterm-colors" "$HOME/.local/bin/winterm-colors"
 link "$REPO/bin/wsl-browser" "$HOME/.local/bin/wsl-browser"
 link "$REPO/bin/onboard-teammate" "$HOME/.local/bin/onboard-teammate"
 link "$REPO/bin/tmux-resurrect-guard" "$HOME/.local/bin/tmux-resurrect-guard"
+link "$REPO/bin/claude-context-sync" "$HOME/.local/bin/claude-context-sync"
 link "$REPO/zsh/jatin.zsh-theme" "$OMZ/themes/jatin.zsh-theme"
 
 chmod +x "$HOME"/.claude/hooks/* "$REPO"/claude/skills/*/scripts/* \
          "$HOME/.local/bin/wt-render" "$HOME/.local/bin/wt-kill" \
          "$HOME/.local/bin/winterm-colors" "$HOME/.local/bin/wsl-browser" \
          "$HOME/.local/bin/onboard-teammate" \
-         "$HOME/.local/bin/tmux-resurrect-guard" 2>/dev/null
+         "$HOME/.local/bin/tmux-resurrect-guard" \
+         "$HOME/.local/bin/claude-context-sync" 2>/dev/null
 
 # ---- toolchains -------------------------------------------------------------
 if ! command -v cargo >/dev/null 2>&1 && [ ! -f "$HOME/.cargo/env" ]; then

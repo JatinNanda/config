@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# claude-context-sync
+#
+# Move Claude Code conversation history and memory between machines.
+#
+# Usage:
+#   claude-context-sync export [archive]           default: ./claude-context.tar.gz
+#   claude-context-sync import <archive> [options]
+#
+#     --from-root PATH   path the archive was created under, if it differs
+#     --to-root PATH     path to remap onto (default: $HOME)
+#     --dry-run          print what import would do, change nothing
+#
+# Project directories are keyed by the slugified absolute path they were used
+# from, so history recorded under /home/jatin/code is invisible to a session
+# started in /Users/jatin/code. --from-root renames those directories so the
+# history is discoverable by --resume and --continue.
+#
+# Credentials are deliberately excluded. Run `claude` on the new machine to
+# log in rather than copying tokens between hosts.
+
+set -euo pipefail
+
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+STAGING=""
+
+cleanup() { [ -n "$STAGING" ] && rm -rf "$STAGING"; return 0; }
+trap cleanup EXIT
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+slug() { printf '%s' "$1" | sed 's|[/.]|-|g'; }
+
+cmd_export() {
+    local out="${1:-claude-context.tar.gz}"
+    [ -d "$CLAUDE_DIR/projects" ] || die "no projects directory at $CLAUDE_DIR"
+
+    local -a paths=(projects)
+    [ -f "$CLAUDE_DIR/history.jsonl" ] && paths+=(history.jsonl)
+
+    tar czf "$out" -C "$CLAUDE_DIR" "${paths[@]}"
+    echo "wrote $out ($(du -h "$out" | cut -f1))"
+    echo "project roots in this archive:"
+    find "$CLAUDE_DIR/projects" -maxdepth 1 -mindepth 1 -type d -printf '  %f\n' | sort
+}
+
+cmd_import() {
+    local archive="" from_root="" to_root="$HOME" dry=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from-root) from_root="${2:-}"; shift 2 ;;
+            --to-root) to_root="${2:-}"; shift 2 ;;
+            --dry-run) dry=1; shift ;;
+            -*) die "unknown option: $1" ;;
+            *) archive="$1"; shift ;;
+        esac
+    done
+
+    [ -n "$archive" ] || die "usage: claude-context-sync import <archive> [--from-root PATH]"
+    [ -f "$archive" ] || die "no such archive: $archive"
+
+    STAGING="$(mktemp -d)"
+    tar xzf "$archive" -C "$STAGING"
+    [ -d "$STAGING/projects" ] || die "archive has no projects directory"
+
+    if [ -n "$from_root" ] && [ "$from_root" != "$to_root" ]; then
+        local from_slug to_slug
+        from_slug="$(slug "$from_root")"
+        to_slug="$(slug "$to_root")"
+        local d base
+        for d in "$STAGING"/projects/*/; do
+            base="$(basename "$d")"
+            case "$base" in
+                "$from_slug"*)
+                    local renamed="${to_slug}${base#"$from_slug"}"
+                    echo "remap $base -> $renamed"
+                    mv "$d" "$STAGING/projects/$renamed"
+                    ;;
+            esac
+        done
+    fi
+
+    if [ "$dry" -eq 1 ]; then
+        echo "would merge into $CLAUDE_DIR/projects:"
+        find "$STAGING/projects" -maxdepth 1 -mindepth 1 -type d -printf '  %f\n' | sort
+        return 0
+    fi
+
+    mkdir -p "$CLAUDE_DIR/projects"
+    cp -a "$STAGING/projects/." "$CLAUDE_DIR/projects/"
+    [ -f "$STAGING/history.jsonl" ] && [ ! -f "$CLAUDE_DIR/history.jsonl" ] &&
+        cp -a "$STAGING/history.jsonl" "$CLAUDE_DIR/history.jsonl"
+
+    echo "imported into $CLAUDE_DIR/projects"
+    echo "run 'claude' to authenticate, then '--resume' from the project directory"
+}
+
+case "${1:-}" in
+    export) shift; cmd_export "$@" ;;
+    import) shift; cmd_import "$@" ;;
+    -h | --help | "") sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) die "unknown command: $1 (expected export or import)" ;;
+esac
