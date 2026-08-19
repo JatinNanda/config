@@ -286,6 +286,7 @@ wt() {
     git -C "$repo_root" worktree remove --force "$worktree_path" 2>/dev/null
     git -C "$repo_root" worktree prune 2>/dev/null
     git -C "$repo_root" branch -D "$branch" 2>/dev/null && echo "deleted branch $branch"
+    [[ -n "$worktree_path" && -d "$worktree_path" ]] && rm -rf -- "$worktree_path"
     echo "closed worktree: $feature"
 
     if [[ -n "$TMUX" ]]; then
