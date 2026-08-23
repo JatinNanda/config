@@ -401,7 +401,7 @@ func (m model) View() string {
 	var parts []string
 	for ph := PhaseKickedOff; ph <= PhaseMergeable; ph++ {
 		if counts[ph] > 0 {
-			parts = append(parts, phStyle(ph).Bold(true).Render(fmt.Sprintf("%s %d", ph.Glyph(), counts[ph]))+
+			parts = append(parts, phStyle(ph).Bold(true).Render(fmt.Sprintf("%s  %d", ph.Glyph(), counts[ph]))+
 				cDim.Render(" "+ph.Label()))
 		}
 	}
@@ -413,7 +413,7 @@ func (m model) View() string {
 	}
 
 	keys := [][2]string{
-		{"enter", "jump"}, {"o", "open"}, {"p", "flip→bot→draft"},
+		{"enter", "jump"}, {"o", "open"}, {"p", "flip → bot → draft"},
 		{"b", "bot-comments"}, {"r", "refresh"}, {"q", "quit"},
 	}
 	var hp []string
