@@ -94,6 +94,13 @@ link "$REPO/bin/wsl-browser" "$HOME/.local/bin/wsl-browser"
 link "$REPO/bin/onboard-teammate" "$HOME/.local/bin/onboard-teammate"
 link "$REPO/bin/tmux-resurrect-guard" "$HOME/.local/bin/tmux-resurrect-guard"
 link "$REPO/bin/claude-context-sync" "$HOME/.local/bin/claude-context-sync"
+
+if command -v go >/dev/null 2>&1; then
+  log "Building prw"
+  (cd "$REPO/tools/prw" && go build -o "$HOME/.local/bin/prw" .) || warn "prw build failed (non-fatal)"
+else
+  warn "go not found — skipping prw build"
+fi
 link "$REPO/zsh/jatin.zsh-theme" "$OMZ/themes/jatin.zsh-theme"
 
 chmod +x "$HOME"/.claude/hooks/* "$REPO"/claude/skills/*/scripts/* \
