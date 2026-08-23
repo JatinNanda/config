@@ -1,16 +1,78 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
+type Origin struct {
+	PR          string `json:"pr"`
+	Cwd         string `json:"cwd"`
+	WindowID    string `json:"window_id"`
+	WindowName  string `json:"window_name"`
+	TmuxSession string `json:"tmux_session"`
+	SessionID   string `json:"session_id"`
+	Source      string `json:"source"`
+	TS          int64  `json:"ts"`
+}
+
 type Local struct {
 	Worktrees map[string]string
 	RepoRoots map[string]string
 	Windows   map[string][2]string
+	LiveIDs   map[string]string
+	ByName    map[string]string
+	Origins   map[string]Origin
+}
+
+func originsPath() string {
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".cache", "prw", "origins.jsonl")
+}
+
+func LoadOrigins() map[string]Origin {
+	res := map[string]Origin{}
+	f, err := os.Open(originsPath())
+	if err != nil {
+		return res
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var o Origin
+		if json.Unmarshal(sc.Bytes(), &o) != nil || o.PR == "" {
+			continue
+		}
+		if prev, ok := res[o.PR]; ok && prev.Source == "" && o.Source != "" {
+			continue
+		}
+		res[o.PR] = o
+	}
+	return res
+}
+
+func AppendOrigins(list []Origin) error {
+	p := originsPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, o := range list {
+		if err := enc.Encode(o); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func codeDir() string {
@@ -74,11 +136,35 @@ func tmuxWindows() map[string][2]string {
 	return res
 }
 
+func tmuxIndex() (ids map[string]string, byName map[string]string) {
+	ids, byName = map[string]string{}, map[string]string{}
+	out, err := exec.Command("tmux", "list-windows", "-a", "-F",
+		"#{window_id}\t#{window_name}").Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 2 {
+			continue
+		}
+		ids[f[0]] = f[1]
+		if _, seen := byName[f[1]]; !seen {
+			byName[f[1]] = f[0]
+		}
+	}
+	return
+}
+
 func LoadLocal() *Local {
+	ids, byName := tmuxIndex()
 	l := &Local{
 		Worktrees: map[string]string{},
 		RepoRoots: discoverRepos(),
 		Windows:   tmuxWindows(),
+		LiveIDs:   ids,
+		ByName:    byName,
+		Origins:   LoadOrigins(),
 	}
 	for name, root := range l.RepoRoots {
 		for br, path := range worktreeBranches(root) {
@@ -89,6 +175,59 @@ func LoadLocal() *Local {
 }
 
 func (l *Local) Attach(p *PR) {
+	if o, ok := l.Origins[keyOf(p)]; ok && l.resolveOrigin(p, o) {
+		return
+	}
+	l.attachByBranch(p)
+}
+
+func keyOf(p *PR) string {
+	return p.Repo + "#" + itoa(p.Number)
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}
+
+func (l *Local) resolveOrigin(p *PR, o Origin) bool {
+	if o.WindowID != "" {
+		if name, ok := l.LiveIDs[o.WindowID]; ok {
+			p.WindowID, p.WindowName = o.WindowID, name
+			p.Worktree, p.OriginKind = o.Cwd, o.Source
+			if p.OriginKind == "" {
+				p.OriginKind = "recorded"
+			}
+			return true
+		}
+	}
+	if o.WindowName != "" {
+		if id, ok := l.ByName[o.WindowName]; ok {
+			p.WindowID, p.WindowName = id, o.WindowName
+			p.Worktree, p.OriginKind = o.Cwd, "renamed"
+			return true
+		}
+	}
+	if o.Cwd != "" {
+		if w, ok := l.Windows[o.Cwd]; ok {
+			p.WindowID, p.WindowName = w[0], w[1]
+			p.Worktree, p.OriginKind = o.Cwd, "cwd"
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Local) attachByBranch(p *PR) {
 	name := p.Repo
 	if i := strings.IndexByte(name, '/'); i >= 0 {
 		name = name[i+1:]
@@ -98,6 +237,7 @@ func (l *Local) Attach(p *PR) {
 		return
 	}
 	p.Worktree = wt
+	p.OriginKind = "branch"
 	best := ""
 	for path, w := range l.Windows {
 		if path == wt || strings.HasPrefix(path, wt+string(os.PathSeparator)) {

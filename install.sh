@@ -95,6 +95,7 @@ link "$REPO/bin/onboard-teammate" "$HOME/.local/bin/onboard-teammate"
 link "$REPO/bin/tmux-resurrect-guard" "$HOME/.local/bin/tmux-resurrect-guard"
 link "$REPO/bin/claude-context-sync" "$HOME/.local/bin/claude-context-sync"
 link "$REPO/bin/strip-comments" "$HOME/.local/bin/strip-comments"
+link "$REPO/bin/prw-record-origin" "$HOME/.local/bin/prw-record-origin"
 
 if command -v go >/dev/null 2>&1; then
   log "Building prw"

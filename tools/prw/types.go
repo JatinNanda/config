@@ -73,6 +73,7 @@ type PR struct {
 	Worktree   string
 	WindowName string
 	WindowID   string
+	OriginKind string
 
 	Flipping bool
 	Working  bool
