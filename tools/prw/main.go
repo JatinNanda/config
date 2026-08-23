@@ -11,7 +11,47 @@ import (
 func main() {
 	list := flag.Bool("list", false, "print the table and exit")
 	backfill := flag.Bool("backfill", false, "recover PR origins from Claude session transcripts")
+	guess := flag.Bool("guess", false, "infer origins for open PRs that still have none")
+	apply := flag.Bool("apply", false, "with -guess, write the inferred origins")
 	flag.Parse()
+
+	if *guess {
+		prs, _, err := FetchPRs()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "prw:", err)
+			os.Exit(1)
+		}
+		l := LoadLocal()
+		for _, p := range prs {
+			l.Attach(p)
+		}
+		found := Guess(prs, l)
+		if len(found) == 0 {
+			fmt.Println("nothing left to guess")
+			return
+		}
+		byKey := map[string]*PR{}
+		for _, p := range prs {
+			byKey[keyOf(p)] = p
+		}
+		for _, o := range found {
+			br := ""
+			if p := byKey[o.PR]; p != nil {
+				br = p.Branch
+			}
+			fmt.Printf("%-9s %-28s %-38s <- %s\n", o.Source, o.PR, trunc(br, 38), o.Cwd)
+		}
+		if !*apply {
+			fmt.Printf("\n%d guesses, nothing written. re-run with -apply to record them.\n", len(found))
+			return
+		}
+		if err := AppendOrigins(found); err != nil {
+			fmt.Fprintln(os.Stderr, "prw:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("\nrecorded %d guessed origins\n", len(found))
+		return
+	}
 
 	if *backfill {
 		known := LoadOrigins()

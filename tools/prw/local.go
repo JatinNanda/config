@@ -181,6 +181,13 @@ func (l *Local) Attach(p *PR) {
 	l.attachByBranch(p)
 }
 
+func or(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 func keyOf(p *PR) string {
 	return p.Repo + "#" + itoa(p.Number)
 }
@@ -213,14 +220,14 @@ func (l *Local) resolveOrigin(p *PR, o Origin) bool {
 	if o.WindowName != "" {
 		if id, ok := l.ByName[o.WindowName]; ok {
 			p.WindowID, p.WindowName = id, o.WindowName
-			p.Worktree, p.OriginKind = o.Cwd, "renamed"
+			p.Worktree, p.OriginKind = o.Cwd, or(o.Source, "renamed")
 			return true
 		}
 	}
 	if o.Cwd != "" {
 		if w, ok := l.Windows[o.Cwd]; ok {
 			p.WindowID, p.WindowName = w[0], w[1]
-			p.Worktree, p.OriginKind = o.Cwd, "cwd"
+			p.Worktree, p.OriginKind = o.Cwd, or(o.Source, "cwd")
 			return true
 		}
 	}
