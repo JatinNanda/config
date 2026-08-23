@@ -18,8 +18,24 @@ var (
 	cWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	cBad    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	cErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Bold(true)
-	cStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
+	cStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("151"))
+	cRule   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	cKey    = lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Bold(true)
+	cAccent = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 )
+
+var phaseColor = map[Phase]lipgloss.Color{
+	PhaseKickedOff:  "245",
+	PhaseBotReview:  "111",
+	PhaseBotFixes:   "214",
+	PhaseYourReview: "141",
+	PhaseReviewer:   "204",
+	PhaseMergeable:  "42",
+}
+
+func phStyle(p Phase) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(phaseColor[p])
+}
 
 type flip struct {
 	started time.Time
@@ -366,17 +382,18 @@ func (m model) View() string {
 			flag = " "
 		}
 		line := fmt.Sprintf(" %s%s %s %-6d %s %s %s   %s    %s    %s",
-			ph.Glyph(), flag, cDim.Render(trunc(p.RepoShort, repoW)), p.Number, win,
-			trunc(p.Branch, brW), ci, bot, hum, trunc(p.Title, titleW))
+			phStyle(ph).Render(ph.Glyph()), flag, cDim.Render(trunc(p.RepoShort, repoW)),
+			p.Number, win, trunc(p.Branch, brW), ci, bot, hum, trunc(p.Title, titleW))
 		if i == m.cursor {
-			b.WriteString(cSel.Render(trunc(strings.TrimRight(line, " "), w-1)))
+			pad := max(0, w-1-lipgloss.Width(line))
+			b.WriteString(cSel.Render(line + strings.Repeat(" ", pad)))
 		} else {
 			b.WriteString(line)
 		}
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\n ")
+	b.WriteString(" " + cRule.Render(strings.Repeat("─", max(0, w-2))) + "\n ")
 	counts := map[Phase]int{}
 	for _, p := range m.prs {
 		counts[p.Phase()]++
@@ -384,20 +401,32 @@ func (m model) View() string {
 	var parts []string
 	for ph := PhaseKickedOff; ph <= PhaseMergeable; ph++ {
 		if counts[ph] > 0 {
-			parts = append(parts, fmt.Sprintf("%s %s %d", ph.Glyph(), ph.Label(), counts[ph]))
+			parts = append(parts, phStyle(ph).Bold(true).Render(fmt.Sprintf("%s %d", ph.Glyph(), counts[ph]))+
+				cDim.Render(" "+ph.Label()))
 		}
 	}
-	b.WriteString(cDim.Render(strings.Join(parts, "   ")))
-	b.WriteString("\n ")
-	if m.status != "" {
-		b.WriteString(cStatus.Render(m.status))
-		b.WriteString("\n ")
-	}
-	age := ""
-	if !m.lastRef.IsZero() {
-		age = fmt.Sprintf(" · updated %ds ago", int(time.Since(m.lastRef).Seconds()))
-	}
-	b.WriteString(cDim.Render("enter jump · o open · p flip→bot→draft · b bot-comments · r refresh · q quit" + age))
+	b.WriteString(strings.Join(parts, cRule.Render("  │  ")))
 	b.WriteString("\n")
+
+	if m.status != "" {
+		b.WriteString(" " + cAccent.Render("▸") + " " + cStatus.Render(m.status) + "\n")
+	}
+
+	keys := [][2]string{
+		{"enter", "jump"}, {"o", "open"}, {"p", "flip→bot→draft"},
+		{"b", "bot-comments"}, {"r", "refresh"}, {"q", "quit"},
+	}
+	var hp []string
+	for _, k := range keys {
+		hp = append(hp, cKey.Render(k[0])+cDim.Render(" "+k[1]))
+	}
+	help := " " + strings.Join(hp, cRule.Render(" · "))
+	if !m.lastRef.IsZero() {
+		age := cDim.Render(fmt.Sprintf("updated %ds ago", int(time.Since(m.lastRef).Seconds())))
+		if pad := w - 1 - lipgloss.Width(help) - lipgloss.Width(age); pad > 1 {
+			help += strings.Repeat(" ", pad) + age
+		}
+	}
+	b.WriteString(help + "\n")
 	return b.String()
 }
