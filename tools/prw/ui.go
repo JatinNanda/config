@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,6 +45,19 @@ type flip struct {
 	stage   string
 }
 
+type job struct {
+	pid int
+	log string
+}
+
+func alive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
 type model struct {
 	prs     []*PR
 	local   *Local
@@ -53,6 +69,7 @@ type model struct {
 	status  string
 	confirm *PR
 	flips   map[string]*flip
+	jobs    map[string]*job
 	lastRef time.Time
 }
 
@@ -74,6 +91,12 @@ type toggledMsg struct {
 	k        string
 	nowDraft bool
 }
+type jobMsg struct {
+	k   string
+	pid int
+	log string
+	err error
+}
 
 func loadCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -87,7 +110,7 @@ func tickCmd(d time.Duration) tea.Cmd {
 }
 
 func initialModel() model {
-	return model{loading: true, flips: map[string]*flip{}, local: LoadLocal()}
+	return model{loading: true, flips: map[string]*flip{}, jobs: map[string]*job{}, local: LoadLocal()}
 }
 
 func (m model) Init() tea.Cmd { return tea.Batch(loadCmd(), tickCmd(60*time.Second)) }
@@ -118,6 +141,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if _, ok := m.flips[key(p)]; ok {
 				p.Flipping = true
 			}
+			if _, ok := m.jobs[key(p)]; ok {
+				p.Working = true
+			}
 		}
 		m.prs = msg.prs
 		m.lastRef = time.Now()
@@ -128,6 +154,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		var cmds []tea.Cmd
 		cmds = append(cmds, loadCmd(), tickCmd(60*time.Second))
+		for k, j := range m.jobs {
+			if !alive(j.pid) {
+				delete(m.jobs, k)
+				m.status = fmt.Sprintf("%s: bot-comments finished (%s)", k, j.log)
+			}
+		}
 		for k, f := range m.flips {
 			if f.stage == "waiting" {
 				cmds = append(cmds, pollFlip(k, f.started))
@@ -161,6 +193,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusMsg:
 		m.status = string(msg)
+
+	case jobMsg:
+		if msg.err != nil {
+			m.status = "bot-comments failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.jobs[msg.k] = &job{pid: msg.pid, log: msg.log}
+		m.status = fmt.Sprintf("%s: bot-comments running detached (pid %d)", msg.k, msg.pid)
+		return m, nil
 
 	case toggledMsg:
 		if msg.nowDraft {
@@ -213,7 +254,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "b":
 			if p := m.sel(); p != nil {
-				return m, botCommentsCmd(p)
+				if _, ok := m.jobs[key(p)]; ok {
+					m.status = key(p) + ": bot-comments already running"
+				} else {
+					p.Working = true
+					return m, botCommentsCmd(p)
+				}
 			}
 		case "p":
 			if p := m.sel(); p != nil {
@@ -335,10 +381,31 @@ func botCommentsCmd(p *PR) tea.Cmd {
 	if dir == "" {
 		return func() tea.Msg { return statusMsg("no local worktree for " + p.Branch) }
 	}
+	k, repo, num := key(p), p.Repo, p.Number
 	return func() tea.Msg {
-		exec.Command("tmux", "new-window", "-n", fmt.Sprintf("bot-%d", p.Number), "-c", dir,
-			fmt.Sprintf("claude %q", fmt.Sprintf("/pr-bot-comments %s#%d", p.Repo, p.Number))).Run()
-		return statusMsg(fmt.Sprintf("opened pr-bot-comments for #%d", p.Number))
+		home, _ := os.UserHomeDir()
+		logDir := filepath.Join(home, ".cache", "prw")
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			return jobMsg{k: k, err: err}
+		}
+		logPath := filepath.Join(logDir, fmt.Sprintf("bot-%d.log", num))
+		f, err := os.Create(logPath)
+		if err != nil {
+			return jobMsg{k: k, err: err}
+		}
+		c := exec.Command("claude", "-p", fmt.Sprintf("/pr-bot-comments %s#%d", repo, num))
+		c.Dir = dir
+		c.Stdout, c.Stderr = f, f
+		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := c.Start(); err != nil {
+			f.Close()
+			return jobMsg{k: k, err: err}
+		}
+		go func() {
+			c.Wait()
+			f.Close()
+		}()
+		return jobMsg{k: k, pid: c.Process.Pid, log: logPath}
 	}
 }
 
@@ -417,11 +484,11 @@ func (m model) View() string {
 		default:
 			ci = cDim.Render(ci)
 		}
-		flag := ""
-		if p.Flipping {
+		flag := " "
+		if p.Working {
+			flag = cAccent.Render("⚙")
+		} else if p.Flipping {
 			flag = cWarn.Render("⟳")
-		} else {
-			flag = " "
 		}
 		line := fmt.Sprintf(" %s%s %s %-6d %s %s %s   %s    %s    %s",
 			phStyle(ph).Render(ph.Glyph()), flag, cDim.Render(trunc(p.RepoShort, repoW)),
@@ -456,7 +523,7 @@ func (m model) View() string {
 
 	keys := [][2]string{
 		{"enter", "jump"}, {"o", "open"}, {"p", "draft⇄ready"},
-		{"f", "flip → bot → draft"}, {"b", "bot-comments"}, {"r", "refresh"}, {"q", "quit"},
+		{"f", "flip → bot → draft"}, {"b", "fix bot comments"}, {"r", "refresh"}, {"q", "quit"},
 	}
 	var hp []string
 	for _, k := range keys {

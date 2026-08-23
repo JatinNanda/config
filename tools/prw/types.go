@@ -75,6 +75,7 @@ type PR struct {
 	WindowID   string
 
 	Flipping bool
+	Working  bool
 }
 
 func (p *PR) Phase() Phase {

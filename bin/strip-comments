@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Strip comments from source files.
+
+By default only removes comments the working tree added on top of git HEAD,
+so pre-existing comments survive. Pass --all to strip every comment.
+"""
+import argparse
+import os
+import re
+import subprocess
+import sys
+
+CLIKE = {
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts",
+    ".go", ".rs", ".java", ".kt", ".swift", ".scala",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".cs",
+    ".css", ".scss", ".less",
+}
+HASH = {".py", ".sh", ".bash", ".zsh", ".tf", ".hcl", ".rb", ".pl", ".yaml", ".yml", ".toml"}
+
+KEEP = re.compile(
+    r"""(?xi)
+    ^\#!                                  # shebang
+  | (?-i:^\s*//(go:|export\b|nolint))
+  | ///\s*<reference                      # TS triple-slash directive
+  | @ts-(ignore|expect-error|nocheck)
+  | @jsx|@jsxImportSource
+  | eslint|biome-ignore|prettier-ignore|oxlint|tslint
+  | istanbul\s+ignore|c8\s+ignore|v8\s+ignore
+  | noqa|type:\s*ignore|pylint|ruff:|mypy:|fmt:\s*(off|on)
+  | tflint-ignore|terraform-docs|checkov:|tfsec:
+  | shellcheck\s+(disable|shell|source)
+  | SPDX-License|Copyright|\(c\)\s*\d{4}|Licensed\s+under
+  | ^\s*\#\s*(region|endregion)
+  | \bpragma\b
+    """
+)
+
+
+def spans_clike(src):
+    """Yield (start, end) offsets of every comment in a C-like source."""
+    out = []
+    i, n = 0, len(src)
+    tmpl = []  # nesting depth of ${ } inside template literals
+    while i < n:
+        c = src[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"":
+            q = c
+            i += 1
+            while i < n and src[i] != q:
+                if src[i] == "\\":
+                    i += 1
+                if src[i] == "\n":
+                    break
+                i += 1
+            i += 1
+            continue
+        if c == "`":
+            i += 1
+            depth = 0
+            while i < n:
+                if src[i] == "\\":
+                    i += 2
+                    continue
+                if src[i] == "$" and i + 1 < n and src[i + 1] == "{":
+                    depth += 1
+                    i += 2
+                    continue
+                if depth and src[i] == "}":
+                    depth -= 1
+                    i += 1
+                    continue
+                if src[i] == "`" and depth == 0:
+                    break
+                i += 1
+            i += 1
+            continue
+        if c == "/" and i + 1 < n:
+            if src[i + 1] == "/":
+                j = src.find("\n", i)
+                j = n if j < 0 else j
+                out.append((i, j))
+                i = j
+                continue
+            if src[i + 1] == "*":
+                j = src.find("*/", i + 2)
+                j = n if j < 0 else j + 2
+                out.append((i, j))
+                i = j
+                continue
+        i += 1
+    _ = tmpl
+    return out
+
+
+def spans_hash(src, ext):
+    out = []
+    i, n = 0, len(src)
+    triple = ext == ".py"
+    while i < n:
+        c = src[i]
+        if c == "\\":
+            i += 2
+            continue
+        if triple and src.startswith(('"""', "'''"), i):
+            q = src[i : i + 3]
+            j = src.find(q, i + 3)
+            i = n if j < 0 else j + 3
+            continue
+        if c in "'\"":
+            q = c
+            i += 1
+            while i < n and src[i] != q:
+                if src[i] == "\\":
+                    i += 1
+                if src[i] == "\n":
+                    break
+                i += 1
+            i += 1
+            continue
+        if c == "#":
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            out.append((i, j))
+            i = j
+            continue
+        i += 1
+    return out
+
+
+def head_lines(path):
+    try:
+        top = subprocess.run(
+            ["git", "-C", os.path.dirname(path) or ".", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        rel = os.path.relpath(os.path.abspath(path), top)
+        blob = subprocess.run(
+            ["git", "-C", top, "show", f"HEAD:{rel}"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return None
+    return set(l.strip() for l in blob.split("\n") if l.strip())
+
+
+def strip(path, strip_all=False):
+    ext = os.path.splitext(path)[1]
+    if ext in CLIKE:
+        finder = spans_clike
+    elif ext in HASH:
+        finder = lambda s: spans_hash(s, ext)
+    else:
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+    except (OSError, UnicodeDecodeError):
+        return False
+
+    prior = None if strip_all else head_lines(path)
+    spans = [(a, b) for a, b in finder(src) if not KEEP.search(src[a:b])]
+    if not spans:
+        return False
+
+    lines = src.split("\n")
+    starts, off = [], 0
+    for l in lines:
+        starts.append(off)
+        off += len(l) + 1
+
+    def line_of(pos):
+        lo, hi = 0, len(starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if starts[mid] <= pos:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    drop, edits = set(), {}
+    for a, b in spans:
+        la, lb = line_of(a), line_of(b - 1 if b > a else a)
+        before = src[starts[la] : a]
+        after = src[b : starts[lb] + len(lines[lb])]
+        whole = not before.strip() and not after.strip()
+        if whole:
+            for k in range(la, lb + 1):
+                if prior is not None and lines[k].strip() in prior:
+                    continue
+                drop.add(k)
+        elif la == lb:
+            if prior is not None and lines[la].strip() in prior:
+                continue
+            edits[la] = (before.rstrip(), after)
+
+    if not drop and not edits:
+        return False
+
+    out = []
+    for i, l in enumerate(lines):
+        if i in drop:
+            continue
+        if i in edits:
+            before, after = edits[i]
+            merged = (before + after).rstrip()
+            if not merged.strip():
+                continue
+            out.append(merged)
+        else:
+            out.append(l)
+
+    new = "\n".join(out)
+    if new == src:
+        return False
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new)
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("paths", nargs="*")
+    ap.add_argument("--all", action="store_true", help="strip pre-existing comments too")
+    ap.add_argument("--quiet", action="store_true")
+    a = ap.parse_args()
+
+    paths = a.paths
+    if not paths and not sys.stdin.isatty():
+        import json
+        try:
+            ev = json.load(sys.stdin)
+        except (json.JSONDecodeError, ValueError):
+            return 0
+        ti = ev.get("tool_input") or {}
+        p = ti.get("file_path") or ti.get("notebook_path")
+        if not p:
+            return 0
+        paths = [p]
+
+    for p in paths:
+        if os.path.isfile(p) and strip(p, a.all) and not a.quiet:
+            print(f"stripped comments: {p}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

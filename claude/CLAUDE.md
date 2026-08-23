@@ -10,33 +10,16 @@
 
 ## Code Style
 
-- Keep comments and documentation MINIMAL. A comment must never restate what the code plainly does or anything easily gleaned from reading the code. Only comment the non-obvious: intent, invariants, gotchas, reasons.
+- NO COMMENTS. Do not write comments or docstrings. Not for intent, not for invariants, not for gotchas, not for a non-obvious why. There is no "but this one is genuinely useful" exception. That judgment call is exactly what produces the comments this rule exists to stop, so treat the ban as absolute.
+- If code needs explaining, explain it in chat, the commit message, or the PR description. Never in the source.
+- The only comments allowed are ones that are load-bearing for tooling, because they change behavior rather than describe it: `// @ts-expect-error`, `// eslint-disable-next-line`, `//go:build`, `/// <reference>`, `# noqa`, `# type: ignore`, `# shellcheck disable`, shebangs, and licence or SPDX headers.
+- Do not remove or rewrite comments that were already there, unless the change made them wrong.
+- Delete commented-out code, never leave it behind.
 - Never use an em-dash, in code, comments, docs, or prose. Use commas, parentheses, or separate sentences.
 
-### Never Document the Iteration
+Iteration history belongs in the commit message and the PR description, and nowhere else. The code is the artifact, not a changelog or a work log.
 
-The code is the artifact, not a changelog or a work log. When a change took several attempts, that history is invisible in the final code and it must stay that way. Err on the side of not documenting a change even if it took many iterations to get there.
-
-NEVER write a comment or docstring that:
-
-- Describes the change instead of the code: `# Now uses batching`, `# Switched to async`, `# Refactored to use X`, `# Updated to handle Y`.
-- References a previous state of the code: `# Previously we did X`, `# Was O(n^2), now O(n)`, `# Old version used a dict`, `# No longer needs the lock`.
-- Narrates the debugging journey: `# This was tricky`, `# Took a few tries`, `# Fixed the race condition`, `# Handles the edge case we hit`.
-- Marks something as new, fixed, added, or removed: `# NEW:`, `# FIX:`, `# ADDED:`, `# Removed the old path`.
-- Justifies the work to a reader: `# Simplified for clarity`, `# Cleaner approach`, `# More robust now`.
-- Adds a docstring to a function that had none, purely because the function was touched.
-- Expands an existing docstring to announce new behavior that the signature and body already show.
-
-Rules:
-
-- Default to NOT adding a comment or docstring. Add one only when a reader seeing the code for the first time, with zero knowledge of this session, would be confused without it.
-- Write every comment as if the code had always looked this way. If a comment only makes sense to someone who saw the previous version, delete it.
-- Do not explain why a bug fix works unless the underlying constraint is genuinely non-obvious and would invite someone to reintroduce the bug. Even then, state the constraint, not the fix: `# API rejects batches over 500`, never `# Fixed: was sending 1000 at a time`.
-- Delete commented-out old code, never leave it behind.
-- Do not remove or rewrite comments that were already there, unless the change made them wrong.
-- Iteration history belongs in the commit message and the PR description, and nowhere else.
-
-When in doubt, leave it out. Under-documenting is the correct failure mode here.
+This is enforced mechanically as well as by instruction: a `PostToolUse` hook runs `strip-comments` on every file written on this machine, removing comments added on top of git HEAD while leaving pre-existing ones and the tooling directives above intact.
 
 ## Commit Behavior
 
