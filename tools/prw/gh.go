@@ -251,13 +251,25 @@ func ChangedFiles(repo string, number int) ([]string, error) {
 	return fs, nil
 }
 
-func MarkReady(repo string, number int) error {
-	return exec.Command("gh", "pr", "ready", fmt.Sprint(number), "--repo", repo).Run()
+func ghReady(repo string, number int, args ...string) error {
+	a := append([]string{"pr", "ready", fmt.Sprint(number), "--repo", repo}, args...)
+	out, err := exec.Command("gh", a...).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		if i := strings.IndexByte(msg, '\n'); i > 0 {
+			msg = msg[:i]
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
 }
 
-func MarkDraft(repo string, number int) error {
-	return exec.Command("gh", "pr", "ready", fmt.Sprint(number), "--repo", repo, "--undo").Run()
-}
+func MarkReady(repo string, number int) error { return ghReady(repo, number) }
+
+func MarkDraft(repo string, number int) error { return ghReady(repo, number, "--undo") }
 
 func ClearReviewers(repo string, number int) {
 	out, err := exec.Command("gh", "pr", "view", fmt.Sprint(number), "--repo", repo,

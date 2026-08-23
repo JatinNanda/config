@@ -70,6 +70,10 @@ type flipMsg struct {
 	err   error
 }
 type statusMsg string
+type toggledMsg struct {
+	k        string
+	nowDraft bool
+}
 
 func loadCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -158,6 +162,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		m.status = string(msg)
 
+	case toggledMsg:
+		if msg.nowDraft {
+			m.status = msg.k + ": converted to draft"
+		} else {
+			m.status = msg.k + ": marked ready for review"
+		}
+		return m, loadCmd()
+
 	case tea.KeyMsg:
 		if m.confirm != nil {
 			switch msg.String() {
@@ -205,11 +217,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "p":
 			if p := m.sel(); p != nil {
+				return m, m.toggleDraft(p)
+			}
+		case "f":
+			if p := m.sel(); p != nil {
 				return m, m.requestFlip(p)
 			}
 		}
 	}
 	return m, nil
+}
+
+func (m *model) toggleDraft(p *PR) tea.Cmd {
+	k := key(p)
+	if _, ok := m.flips[k]; ok {
+		return func() tea.Msg { return statusMsg(k + ": flip in progress, let it finish") }
+	}
+	repo, num, wasDraft := p.Repo, p.Number, p.IsDraft
+	if wasDraft {
+		m.status = k + ": marking ready…"
+	} else {
+		m.status = k + ": converting to draft…"
+	}
+	p.IsDraft = !wasDraft
+	return func() tea.Msg {
+		var err error
+		if wasDraft {
+			err = MarkReady(repo, num)
+		} else {
+			err = MarkDraft(repo, num)
+		}
+		if err != nil {
+			return statusMsg(fmt.Sprintf("%s: %v", k, err))
+		}
+		return toggledMsg{k, !wasDraft}
+	}
 }
 
 func (m *model) requestFlip(p *PR) tea.Cmd {
@@ -413,8 +455,8 @@ func (m model) View() string {
 	}
 
 	keys := [][2]string{
-		{"enter", "jump"}, {"o", "open"}, {"p", "flip → bot → draft"},
-		{"b", "bot-comments"}, {"r", "refresh"}, {"q", "quit"},
+		{"enter", "jump"}, {"o", "open"}, {"p", "draft⇄ready"},
+		{"f", "flip → bot → draft"}, {"b", "bot-comments"}, {"r", "refresh"}, {"q", "quit"},
 	}
 	var hp []string
 	for _, k := range keys {
