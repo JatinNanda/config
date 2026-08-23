@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,4 +318,46 @@ func CodeownedHits(repoRoot string, files []string) []string {
 		}
 	}
 	return hits
+}
+
+func (l *Local) BranchWorktree(repo, branch string) string {
+	name := repo
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	return l.Worktrees[name+"\x00"+branch]
+}
+
+func (l *Local) EnsureWorktree(repo, branch string) (string, error) {
+	if wt := l.BranchWorktree(repo, branch); wt != "" {
+		return wt, nil
+	}
+	root := l.RepoRoot(repo)
+	if root == "" {
+		return "", fmt.Errorf("no local clone of %s", repo)
+	}
+	name := repo
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	feature := branch
+	if i := strings.LastIndexByte(feature, '/'); i >= 0 && strings.HasPrefix(feature, "jatin/") {
+		feature = feature[i+1:]
+	}
+	feature = strings.ReplaceAll(feature, "/", "-")
+	home, _ := os.UserHomeDir()
+	path := filepath.Join(home, ".worktrees", name, feature)
+
+	if _, err := os.Stat(path); err == nil {
+		return "", fmt.Errorf("%s already exists but holds a different branch", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	exec.Command("git", "-C", root, "fetch", "origin", branch).Run()
+	out, err := exec.Command("git", "-C", root, "worktree", "add", path, branch).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("worktree add: %s", strings.TrimSpace(string(out)))
+	}
+	return path, nil
 }

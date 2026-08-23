@@ -131,15 +131,26 @@ def spans_hash(src, ext):
     return out
 
 
-def head_lines(path):
+def git_top(path):
+    p = os.path.abspath(path)
+    d = p if os.path.isdir(p) else (os.path.dirname(p) or ".")
     try:
-        top = subprocess.run(
-            ["git", "-C", os.path.dirname(path) or ".", "rev-parse", "--show-toplevel"],
+        return subprocess.run(
+            ["git", "-C", d, "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, check=True,
         ).stdout.strip()
-        rel = os.path.relpath(os.path.abspath(path), top)
+    except subprocess.CalledProcessError:
+        return None
+
+
+def head_lines(path, ref="HEAD"):
+    top = git_top(path)
+    if not top:
+        return None
+    rel = os.path.relpath(os.path.abspath(path), top)
+    try:
         blob = subprocess.run(
-            ["git", "-C", top, "show", f"HEAD:{rel}"],
+            ["git", "-C", top, "show", f"{ref}:{rel}"],
             capture_output=True, text=True, check=True,
         ).stdout
     except subprocess.CalledProcessError:
@@ -147,7 +158,25 @@ def head_lines(path):
     return set(l.strip() for l in blob.split("\n") if l.strip())
 
 
-def strip(path, strip_all=False):
+def changed_files(base, cwd="."):
+    top = git_top(cwd)
+    if not top:
+        return []
+    try:
+        merge_base = subprocess.run(
+            ["git", "-C", top, "merge-base", base, "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        out = subprocess.run(
+            ["git", "-C", top, "diff", "--name-only", "--diff-filter=d", merge_base, "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return []
+    return [os.path.join(top, l) for l in out.split("\n") if l.strip()]
+
+
+def strip(path, strip_all=False, ref="HEAD"):
     ext = os.path.splitext(path)[1]
     if ext in CLIKE:
         finder = spans_clike
@@ -161,7 +190,7 @@ def strip(path, strip_all=False):
     except (OSError, UnicodeDecodeError):
         return False
 
-    prior = None if strip_all else head_lines(path)
+    prior = None if strip_all else head_lines(path, ref)
     spans = [(a, b) for a, b in finder(src) if not KEEP.search(src[a:b])]
     if not spans:
         return False
@@ -226,11 +255,36 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="*")
     ap.add_argument("--all", action="store_true", help="strip pre-existing comments too")
+    ap.add_argument("--base", help="compare against the merge-base with this ref instead of HEAD")
+    ap.add_argument("--changed", action="store_true", help="operate on files changed since --base")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
 
+    ref = "HEAD"
+    if a.base:
+        top = git_top(".")
+        if top:
+            try:
+                ref = subprocess.run(
+                    ["git", "-C", top, "merge-base", a.base, "HEAD"],
+                    capture_output=True, text=True, check=True,
+                ).stdout.strip() or "HEAD"
+            except subprocess.CalledProcessError:
+                print(f"strip-comments: cannot resolve {a.base}", file=sys.stderr)
+                return 1
+
     paths = a.paths
-    if not paths and not sys.stdin.isatty():
+    if a.changed:
+        if not a.base:
+            print("strip-comments: --changed requires --base", file=sys.stderr)
+            return 1
+        paths = changed_files(a.base)
+        if not paths:
+            if not a.quiet:
+                print(f"strip-comments: no changed files vs {a.base}", file=sys.stderr)
+            return 0
+
+    if not paths and not a.changed and not a.base and not sys.stdin.isatty():
         import json
         try:
             ev = json.load(sys.stdin)
@@ -243,7 +297,7 @@ def main():
         paths = [p]
 
     for p in paths:
-        if os.path.isfile(p) and strip(p, a.all) and not a.quiet:
+        if os.path.isfile(p) and strip(p, a.all, ref) and not a.quiet:
             print(f"stripped comments: {p}", file=sys.stderr)
     return 0
 

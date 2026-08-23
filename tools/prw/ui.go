@@ -255,10 +255,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "b":
 			if p := m.sel(); p != nil {
 				if _, ok := m.jobs[key(p)]; ok {
-					m.status = key(p) + ": bot-comments already running"
+					m.status = key(p) + ": a job is already running"
 				} else {
 					p.Working = true
-					return m, botCommentsCmd(p)
+					l, pr := m.local, p
+					m.status = key(p) + ": starting bot-comments"
+					return m, func() tea.Msg {
+						return spawnAgent(l, pr, "bot",
+							fmt.Sprintf("/pr-bot-comments %s#%d", pr.Repo, pr.Number))
+					}
+				}
+			}
+		case "c":
+			if p := m.sel(); p != nil {
+				if _, ok := m.jobs[key(p)]; ok {
+					m.status = key(p) + ": a job is already running"
+				} else {
+					p.Working = true
+					l, pr := m.local, p
+					m.status = key(p) + ": starting cleanup"
+					return m, func() tea.Msg {
+						return spawnAgent(l, pr, "clean", cleanupPrompt(pr))
+					}
 				}
 			}
 		case "p":
@@ -376,37 +394,39 @@ func jumpCmd(p *PR) tea.Cmd {
 	}
 }
 
-func botCommentsCmd(p *PR) tea.Cmd {
-	dir := p.Worktree
-	if dir == "" {
-		return func() tea.Msg { return statusMsg("no local worktree for " + p.Branch) }
+func spawnAgent(l *Local, p *PR, tag, prompt string) tea.Msg {
+	k, num := key(p), p.Number
+	dir, err := l.EnsureWorktree(p.Repo, p.Branch)
+	if err != nil {
+		return jobMsg{k: k, err: err}
 	}
-	k, repo, num := key(p), p.Repo, p.Number
-	return func() tea.Msg {
-		home, _ := os.UserHomeDir()
-		logDir := filepath.Join(home, ".cache", "prw")
-		if err := os.MkdirAll(logDir, 0o755); err != nil {
-			return jobMsg{k: k, err: err}
-		}
-		logPath := filepath.Join(logDir, fmt.Sprintf("bot-%d.log", num))
-		f, err := os.Create(logPath)
-		if err != nil {
-			return jobMsg{k: k, err: err}
-		}
-		c := exec.Command("claude", "-p", fmt.Sprintf("/pr-bot-comments %s#%d", repo, num))
-		c.Dir = dir
-		c.Stdout, c.Stderr = f, f
-		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		if err := c.Start(); err != nil {
-			f.Close()
-			return jobMsg{k: k, err: err}
-		}
-		go func() {
-			c.Wait()
-			f.Close()
-		}()
-		return jobMsg{k: k, pid: c.Process.Pid, log: logPath}
+	return startDetached(k, num, tag, dir, prompt)
+}
+
+func startDetached(k string, num int, tag, dir, prompt string) tea.Msg {
+	home, _ := os.UserHomeDir()
+	logDir := filepath.Join(home, ".cache", "prw")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return jobMsg{k: k, err: err}
 	}
+	logPath := filepath.Join(logDir, fmt.Sprintf("%s-%d.log", tag, num))
+	f, err := os.Create(logPath)
+	if err != nil {
+		return jobMsg{k: k, err: err}
+	}
+	c := exec.Command("claude", "-p", prompt)
+	c.Dir = dir
+	c.Stdout, c.Stderr = f, f
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := c.Start(); err != nil {
+		f.Close()
+		return jobMsg{k: k, err: err}
+	}
+	go func() {
+		c.Wait()
+		f.Close()
+	}()
+	return jobMsg{k: k, pid: c.Process.Pid, log: logPath}
 }
 
 func max(a, b int) int {
@@ -523,7 +543,8 @@ func (m model) View() string {
 
 	keys := [][2]string{
 		{"enter", "jump"}, {"o", "open"}, {"p", "draft⇄ready"},
-		{"f", "flip → bot → draft"}, {"b", "fix bot comments"}, {"r", "refresh"}, {"q", "quit"},
+		{"f", "flip → bot → draft"}, {"b", "fix bot comments"},
+		{"c", "strip comments + fix CI"}, {"r", "refresh"}, {"q", "quit"},
 	}
 	var hp []string
 	for _, k := range keys {
