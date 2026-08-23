@@ -136,8 +136,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = ""
 		m.me = msg.me
 		m.local = LoadLocal()
+		states := LoadJobs()
 		for _, p := range msg.prs {
 			m.local.Attach(p)
+			if st, ok := states[key(p)]; ok {
+				if st.Running && !alive(st.Pid) {
+					st.Running = false
+					st.Ended = time.Now().Unix()
+					SaveJob(st, st.Tag, p.Number)
+				}
+				p.LogPath = st.Log
+				a, msgTxt := st.Alert()
+				p.Alert, p.AlertMsg = a, msgTxt
+			}
 			if _, ok := m.flips[key(p)]; ok {
 				p.Flipping = true
 			}
@@ -157,7 +168,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for k, j := range m.jobs {
 			if !alive(j.pid) {
 				delete(m.jobs, k)
-				m.status = fmt.Sprintf("%s: bot-comments finished (%s)", k, j.log)
+				m.status = fmt.Sprintf("%s: agent finished (%s)", k, j.log)
 			}
 		}
 		for k, f := range m.flips {
@@ -265,6 +276,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							fmt.Sprintf("/pr-bot-comments %s#%d", pr.Repo, pr.Number))
 					}
 				}
+			}
+		case "L":
+			if p := m.sel(); p != nil {
+				return m, openLogCmd(p)
+			}
+		case "x":
+			if p := m.sel(); p != nil && p.Alert != "" && p.Alert != "running" {
+				ClearJob("clean", p.Number)
+				ClearJob("bot", p.Number)
+				p.Alert, p.AlertMsg = "", ""
+				m.status = key(p) + ": alert cleared"
 			}
 		case "c":
 			if p := m.sel(); p != nil {
@@ -404,29 +426,55 @@ func spawnAgent(l *Local, p *PR, tag, prompt string) tea.Msg {
 }
 
 func startDetached(k string, num int, tag, dir, prompt string) tea.Msg {
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, ".cache", "prw")
+	logDir := cacheDir()
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return jobMsg{k: k, err: err}
 	}
 	logPath := filepath.Join(logDir, fmt.Sprintf("%s-%d.log", tag, num))
+	resPath := filepath.Join(logDir, fmt.Sprintf("%s-%d.result", tag, num))
+	os.Remove(resPath)
 	f, err := os.Create(logPath)
 	if err != nil {
 		return jobMsg{k: k, err: err}
 	}
 	c := exec.Command("claude", "-p", prompt)
 	c.Dir = dir
+	c.Env = append(os.Environ(), "PRW_RESULT="+resPath)
 	c.Stdout, c.Stderr = f, f
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := c.Start(); err != nil {
 		f.Close()
 		return jobMsg{k: k, err: err}
 	}
+	st := JobState{
+		PR: k, Tag: tag, Pid: c.Process.Pid, Log: logPath, Result: resPath,
+		Started: time.Now().Unix(), Running: true,
+	}
+	SaveJob(st, tag, num)
 	go func() {
 		c.Wait()
 		f.Close()
+		st.Running = false
+		st.Ended = time.Now().Unix()
+		SaveJob(st, tag, num)
 	}()
 	return jobMsg{k: k, pid: c.Process.Pid, log: logPath}
+}
+
+func openLogCmd(p *PR) tea.Cmd {
+	if p.LogPath == "" {
+		return func() tea.Msg { return statusMsg("no agent log for this PR") }
+	}
+	path := p.LogPath
+	num := p.Number
+	return func() tea.Msg {
+		if _, err := os.Stat(path); err != nil {
+			return statusMsg("log is gone: " + path)
+		}
+		exec.Command("tmux", "new-window", "-n", fmt.Sprintf("log-%d", num),
+			fmt.Sprintf("less +G %q", path)).Run()
+		return statusMsg("opened " + path)
+	}
 }
 
 func max(a, b int) int {
@@ -505,9 +553,14 @@ func (m model) View() string {
 			ci = cDim.Render(ci)
 		}
 		flag := " "
-		if p.Working {
+		switch {
+		case p.Working || p.Alert == "running":
 			flag = cAccent.Render("⚙")
-		} else if p.Flipping {
+		case p.Alert == "failed":
+			flag = cBad.Render("✗")
+		case p.Alert == "noreport" || p.Alert == "unknown":
+			flag = cWarn.Render("!")
+		case p.Flipping:
 			flag = cWarn.Render("⟳")
 		}
 		line := fmt.Sprintf(" %s%s %s %-6d %s %s %s   %s    %s    %s",
@@ -537,6 +590,16 @@ func (m model) View() string {
 	b.WriteString(strings.Join(parts, cRule.Render("  │  ")))
 	b.WriteString("\n")
 
+	if sel := m.prs; len(sel) > 0 && m.cursor < len(sel) {
+		if p := sel[m.cursor]; p.AlertMsg != "" {
+			mark, style := "!", cWarn
+			if p.Alert == "failed" {
+				mark, style = "✗", cBad
+			}
+			b.WriteString(" " + style.Render(mark) + " " + style.Render(p.AlertMsg) +
+				cDim.Render("   L log · x clear") + "\n")
+		}
+	}
 	if m.status != "" {
 		b.WriteString(" " + cAccent.Render("▸") + " " + cStatus.Render(m.status) + "\n")
 	}
@@ -544,7 +607,8 @@ func (m model) View() string {
 	keys := [][2]string{
 		{"enter", "jump"}, {"o", "open"}, {"p", "draft⇄ready"},
 		{"f", "flip → bot → draft"}, {"b", "fix bot comments"},
-		{"c", "strip comments + fix CI"}, {"r", "refresh"}, {"q", "quit"},
+		{"c", "rebase + strip + fix CI"}, {"L", "log"}, {"x", "clear"},
+		{"r", "refresh"}, {"q", "quit"},
 	}
 	var hp []string
 	for _, k := range keys {

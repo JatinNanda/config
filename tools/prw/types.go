@@ -77,6 +77,9 @@ type PR struct {
 
 	Flipping bool
 	Working  bool
+	Alert    string
+	AlertMsg string
+	LogPath  string
 }
 
 func (p *PR) Phase() Phase {
