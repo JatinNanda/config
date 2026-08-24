@@ -87,6 +87,5 @@
   "enabledPlugins": {
     "greptile@claude-plugins-official": true
   },
-  "tui": "fullscreen",
   "autoDreamEnabled": true
 }
