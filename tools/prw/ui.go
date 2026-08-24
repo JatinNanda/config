@@ -59,7 +59,11 @@ func alive(pid int) bool {
 }
 
 type model struct {
+	all     []*PR
 	prs     []*PR
+	hidden  map[string]bool
+	filter  string
+	search  bool
 	local   *Local
 	me      string
 	cursor  int
@@ -139,11 +143,42 @@ func (m *model) applyJobStates() {
 }
 
 func initialModel() model {
-	return model{loading: true, flips: map[string]*flip{}, jobs: map[string]*job{}, local: LoadLocal()}
+	return model{
+		loading: true,
+		flips:   map[string]*flip{},
+		jobs:    map[string]*job{},
+		hidden:  LoadHidden(),
+		local:   LoadLocal(),
+	}
 }
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(loadCmd(), tickCmd(localEvery), refreshCmd(refreshEvery))
+}
+
+func haystack(p *PR) string {
+	return strings.ToLower(strings.Join([]string{
+		p.RepoShort, p.Repo, itoa(p.Number), "#" + itoa(p.Number),
+		p.Branch, p.Title, p.WindowName, p.Phase().Label(), p.OriginKind,
+	}, " "))
+}
+
+func (m *model) refilter() {
+	q := strings.ToLower(strings.TrimSpace(m.filter))
+	var keep []*PR
+	for _, p := range m.all {
+		if m.hidden[key(p)] {
+			continue
+		}
+		if q != "" && !strings.Contains(haystack(p), q) {
+			continue
+		}
+		keep = append(keep, p)
+	}
+	m.prs = keep
+	if m.cursor >= len(m.prs) {
+		m.cursor = max(0, len(m.prs)-1)
+	}
 }
 
 func (m *model) sel() *PR {
@@ -187,11 +222,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.Working = true
 			}
 		}
-		m.prs = msg.prs
+		m.all = msg.prs
+		m.refilter()
 		m.lastRef = time.Now()
-		if m.cursor >= len(m.prs) {
-			m.cursor = max(0, len(m.prs)-1)
-		}
 
 	case tickMsg:
 		for k, j := range m.jobs {
@@ -257,6 +290,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadCmd()
 
 	case tea.KeyMsg:
+		if m.search {
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				m.search, m.filter = false, ""
+				m.refilter()
+			case "enter":
+				m.search = false
+			case "backspace":
+				if r := []rune(m.filter); len(r) > 0 {
+					m.filter = string(r[:len(r)-1])
+					m.refilter()
+				}
+			case " ", "space":
+				m.filter += " "
+				m.refilter()
+			default:
+				if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+					m.filter += string(msg.Runes)
+					m.refilter()
+				}
+			}
+			return m, nil
+		}
 		if m.confirm != nil {
 			switch msg.String() {
 			case "y", "Y":
@@ -284,6 +340,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		case "G":
 			m.cursor = max(0, len(m.prs)-1)
+		case "/":
+			m.search = true
+			m.status = ""
+		default:
+			if msg.Type == tea.KeyRunes && len(msg.Runes) > 1 && msg.Runes[0] == '/' {
+				m.search = true
+				m.filter += string(msg.Runes[1:])
+				m.refilter()
+			}
+		case "esc":
+			if m.filter != "" {
+				m.filter = ""
+				m.refilter()
+				m.status = "filter cleared"
+			}
+		case "ctrl+h":
+			if p := m.sel(); p != nil {
+				m.hidden[key(p)] = true
+				if err := SaveHidden(m.hidden); err != nil {
+					m.status = "hide failed: " + err.Error()
+				} else {
+					m.status = fmt.Sprintf("hid %s (prw -unhide %s to undo)", key(p), key(p))
+				}
+				m.refilter()
+			}
 		case "r":
 			m.loading = true
 			m.status = "refreshing"
@@ -511,6 +592,16 @@ func openLogCmd(p *PR) tea.Cmd {
 	}
 }
 
+func (m model) hiddenCount() int {
+	n := 0
+	for _, p := range m.all {
+		if m.hidden[key(p)] {
+			n++
+		}
+	}
+	return n
+}
+
 func shortDur(d time.Duration) string {
 	s := int(d.Seconds())
 	if s < 60 {
@@ -657,14 +748,25 @@ func (m model) View() string {
 				cDim.Render("   L log · x clear") + "\n")
 		}
 	}
+	if m.search || m.filter != "" {
+		cur := m.filter
+		if m.search {
+			cur += "▏"
+		}
+		hid := ""
+		if n := len(m.all) - len(m.prs) - m.hiddenCount(); n >= 0 {
+			hid = cDim.Render(fmt.Sprintf("   %d/%d shown", len(m.prs), len(m.all)))
+		}
+		b.WriteString(" " + cAccent.Render("/") + " " + cStatus.Render(cur) + hid + "\n")
+	}
 	if m.status != "" {
 		b.WriteString(" " + cAccent.Render("▸") + " " + cStatus.Render(m.status) + "\n")
 	}
 
 	keys := [][2]string{
-		{"enter", "jump"}, {"o", "open"}, {"p", "draft⇄ready"},
-		{"f", "flip → bot → draft"}, {"b", "fix bot comments"},
-		{"c", "rebase + strip + fix CI"}, {"L", "log"}, {"x", "clear"},
+		{"enter", "jump"}, {"o", "open"}, {"/", "search"}, {"p", "draft⇄ready"},
+		{"f", "bot-flip"}, {"b", "bot-fix"}, {"c", "cleanup"},
+		{"L", "log"}, {"x", "clear"}, {"^h", "hide"},
 		{"r", "refresh"}, {"q", "quit"},
 	}
 	var hp []string

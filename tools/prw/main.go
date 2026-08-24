@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -12,8 +13,45 @@ func main() {
 	list := flag.Bool("list", false, "print the table and exit")
 	backfill := flag.Bool("backfill", false, "recover PR origins from Claude session transcripts")
 	guess := flag.Bool("guess", false, "infer origins for open PRs that still have none")
+	hidden := flag.Bool("hidden", false, "list PRs hidden from the table")
+	unhide := flag.String("unhide", "", "unhide a PR (owner/repo#123, or all)")
 	apply := flag.Bool("apply", false, "with -guess, write the inferred origins")
 	flag.Parse()
+
+	if *hidden {
+		h := LoadHidden()
+		if len(h) == 0 {
+			fmt.Println("nothing hidden")
+			return
+		}
+		keys := make([]string, 0, len(h))
+		for k := range h {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Println(k)
+		}
+		return
+	}
+
+	if *unhide != "" {
+		h := LoadHidden()
+		if *unhide == "all" {
+			h = map[string]bool{}
+		} else if !h[*unhide] {
+			fmt.Fprintf(os.Stderr, "prw: %s is not hidden\n", *unhide)
+			os.Exit(1)
+		} else {
+			delete(h, *unhide)
+		}
+		if err := SaveHidden(h); err != nil {
+			fmt.Fprintln(os.Stderr, "prw:", err)
+			os.Exit(1)
+		}
+		fmt.Println("unhidden:", *unhide)
+		return
+	}
 
 	if *guess {
 		prs, _, err := FetchPRs()
