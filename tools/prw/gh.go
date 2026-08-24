@@ -12,18 +12,18 @@ import (
 const prQuery = `
 query($q:String!){
   viewer{ login }
-  search(query:$q, type:ISSUE, first:60){
+  search(query:$q, type:ISSUE, first:50){
     nodes{
       ... on PullRequest{
         number title url isDraft updatedAt headRefName
         repository{ nameWithOwner }
         commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state } } } }
-        reviews(first:60){ nodes{ author{ login __typename } state } }
+        reviews(first:30){ nodes{ author{ login __typename } state } }
         reviewRequests(first:20){ nodes{ requestedReviewer{ __typename } } }
-        reviewThreads(first:100){
+        reviewThreads(first:50){
           nodes{
             isResolved
-            comments(first:10){ nodes{ author{ login __typename } } }
+            comments(first:5){ nodes{ author{ login __typename } } }
           }
         }
       }

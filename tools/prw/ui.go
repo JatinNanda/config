@@ -80,7 +80,15 @@ type prsMsg struct {
 	me  string
 	err error
 }
+
+const (
+	refreshEvery  = 5 * time.Minute
+	localEvery    = 10 * time.Second
+	flipPollEvery = 2 * time.Minute
+)
+
 type tickMsg time.Time
+type refreshMsg time.Time
 type flipMsg struct {
 	k     string
 	stage string
@@ -109,11 +117,34 @@ func tickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+func refreshCmd(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg { return refreshMsg(t) })
+}
+
+func (m *model) applyJobStates() {
+	states := LoadJobs()
+	for _, p := range m.prs {
+		st, ok := states[key(p)]
+		if !ok {
+			continue
+		}
+		if st.Running && !alive(st.Pid) {
+			st.Running = false
+			st.Ended = time.Now().Unix()
+			SaveJob(st, st.Tag, p.Number)
+		}
+		p.LogPath = st.Log
+		p.Alert, p.AlertMsg = st.Alert()
+	}
+}
+
 func initialModel() model {
 	return model{loading: true, flips: map[string]*flip{}, jobs: map[string]*job{}, local: LoadLocal()}
 }
 
-func (m model) Init() tea.Cmd { return tea.Batch(loadCmd(), tickCmd(60*time.Second)) }
+func (m model) Init() tea.Cmd {
+	return tea.Batch(loadCmd(), tickCmd(localEvery), refreshCmd(refreshEvery))
+}
 
 func (m *model) sel() *PR {
 	if m.cursor < 0 || m.cursor >= len(m.prs) {
@@ -163,14 +194,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
-		var cmds []tea.Cmd
-		cmds = append(cmds, loadCmd(), tickCmd(60*time.Second))
 		for k, j := range m.jobs {
 			if !alive(j.pid) {
 				delete(m.jobs, k)
 				m.status = fmt.Sprintf("%s: agent finished (%s)", k, j.log)
 			}
 		}
+		m.applyJobStates()
+		return m, tickCmd(localEvery)
+
+	case refreshMsg:
+		cmds := []tea.Cmd{loadCmd(), refreshCmd(refreshEvery)}
 		for k, f := range m.flips {
 			if f.stage == "waiting" {
 				cmds = append(cmds, pollFlip(k, f.started))
@@ -197,7 +231,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = msg.k + ": bot reviewed, back to draft"
 			return m, loadCmd()
 		case "pending":
-			return m, tea.Tick(45*time.Second, func(time.Time) tea.Msg {
+			return m, tea.Tick(flipPollEvery, func(time.Time) tea.Msg {
 				return pollNow(msg.k, f.started)
 			})
 		}
@@ -396,7 +430,7 @@ func pollNow(k string, since time.Time) tea.Msg {
 }
 
 func pollFlip(k string, since time.Time) tea.Cmd {
-	return tea.Tick(45*time.Second, func(time.Time) tea.Msg { return pollNow(k, since) })
+	return tea.Tick(flipPollEvery, func(time.Time) tea.Msg { return pollNow(k, since) })
 }
 
 func parseKey(k string) (string, int) {
@@ -475,6 +509,17 @@ func openLogCmd(p *PR) tea.Cmd {
 			fmt.Sprintf("less +G %q", path)).Run()
 		return statusMsg("opened " + path)
 	}
+}
+
+func shortDur(d time.Duration) string {
+	s := int(d.Seconds())
+	if s < 60 {
+		return fmt.Sprintf("%ds", s)
+	}
+	if s < 3600 {
+		return fmt.Sprintf("%dm%02ds", s/60, s%60)
+	}
+	return fmt.Sprintf("%dh%02dm", s/3600, (s%3600)/60)
 }
 
 func max(a, b int) int {
@@ -587,7 +632,19 @@ func (m model) View() string {
 				cDim.Render(" "+ph.Label()))
 		}
 	}
-	b.WriteString(strings.Join(parts, cRule.Render("  │  ")))
+	summary := strings.Join(parts, cRule.Render("  │  "))
+	if !m.lastRef.IsZero() {
+		since := time.Since(m.lastRef)
+		next := refreshEvery - since
+		if next < 0 {
+			next = 0
+		}
+		stamp := cDim.Render(fmt.Sprintf("updated %s · next %s", shortDur(since), shortDur(next)))
+		if pad := w - 2 - lipgloss.Width(summary) - lipgloss.Width(stamp); pad > 1 {
+			summary += strings.Repeat(" ", pad) + stamp
+		}
+	}
+	b.WriteString(summary)
 	b.WriteString("\n")
 
 	if sel := m.prs; len(sel) > 0 && m.cursor < len(sel) {
@@ -614,13 +671,6 @@ func (m model) View() string {
 	for _, k := range keys {
 		hp = append(hp, cKey.Render(k[0])+cDim.Render(" "+k[1]))
 	}
-	help := " " + strings.Join(hp, cRule.Render(" · "))
-	if !m.lastRef.IsZero() {
-		age := cDim.Render(fmt.Sprintf("updated %ds ago", int(time.Since(m.lastRef).Seconds())))
-		if pad := w - 1 - lipgloss.Width(help) - lipgloss.Width(age); pad > 1 {
-			help += strings.Repeat(" ", pad) + age
-		}
-	}
-	b.WriteString(help + "\n")
+	b.WriteString(" " + strings.Join(hp, cRule.Render(" · ")) + "\n")
 	return b.String()
 }
