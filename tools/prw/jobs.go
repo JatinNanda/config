@@ -115,3 +115,11 @@ func (j JobState) Alert() (string, string) {
 	}
 	return "unknown", sum
 }
+
+func ClearAlert(num int) {
+	for _, tag := range []string{"clean", "bot"} {
+		ClearJob(tag, num)
+		base := filepath.Join(cacheDir(), tag+"-"+itoa(num))
+		os.Remove(base + ".result")
+	}
+}

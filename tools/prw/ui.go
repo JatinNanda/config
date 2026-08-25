@@ -355,13 +355,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refilter()
 				m.status = "filter cleared"
 			}
-		case "ctrl+h":
+		case "H":
 			if p := m.sel(); p != nil {
 				m.hidden[key(p)] = true
 				if err := SaveHidden(m.hidden); err != nil {
 					m.status = "hide failed: " + err.Error()
 				} else {
-					m.status = fmt.Sprintf("hid %s (prw -unhide %s to undo)", key(p), key(p))
+					m.status = fmt.Sprintf("hid %s · prw -unhide %s to undo", key(p), key(p))
 				}
 				m.refilter()
 			}
@@ -397,11 +397,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, openLogCmd(p)
 			}
 		case "x":
-			if p := m.sel(); p != nil && p.Alert != "" && p.Alert != "running" {
-				ClearJob("clean", p.Number)
-				ClearJob("bot", p.Number)
-				p.Alert, p.AlertMsg = "", ""
-				m.status = key(p) + ": alert cleared"
+			if p := m.sel(); p != nil {
+				switch {
+				case p.Alert == "":
+					m.status = key(p) + ": nothing to clear"
+				case p.Alert == "running":
+					m.status = key(p) + ": job still running, let it report"
+				default:
+					ClearAlert(p.Number)
+					p.Alert, p.AlertMsg, p.LogPath = "", "", ""
+					m.status = key(p) + ": alert cleared"
+				}
 			}
 		case "c":
 			if p := m.sel(); p != nil {
@@ -766,7 +772,7 @@ func (m model) View() string {
 	keys := [][2]string{
 		{"enter", "jump"}, {"o", "open"}, {"/", "search"}, {"p", "draft⇄ready"},
 		{"f", "bot-flip"}, {"b", "bot-fix"}, {"c", "cleanup"},
-		{"L", "log"}, {"x", "clear"}, {"^h", "hide"},
+		{"L", "log"}, {"x", "clear"}, {"H", "hide"},
 		{"r", "refresh"}, {"q", "quit"},
 	}
 	var hp []string
