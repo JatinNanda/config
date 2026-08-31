@@ -1,17 +1,17 @@
 #!/bin/bash
 # onboard-teammate
 #
-# Grants a new teammate access to the three systems we hand out by
-# hand: the accrual-dev GitHub org, Arc, and the tailnet.
+# Grants a new teammate access to the systems we hand out by hand.
 #
 # Run me when: someone joins and you have their email + GitHub handle.
 #
 # Usage:
 #   onboard-teammate --email <email> --github <username> [options]
 #
+#   --tier t        temporary | permanent (default: temporary)
 #   --teams a,b     GitHub teams to add them to (default: humans,builders)
 #   --role member   GitHub org role: member | admin (default: member)
-#   --skip x,y      Systems to skip: github, arc, tailscale
+#   --skip x,y      Systems to skip: github, arc, tailscale, depot
 #   --apply         Actually do it. Without this you get a dry run.
 #
 # Prereqs:
@@ -23,19 +23,30 @@
 #     the tailnet. The devbox client that
 #     arc/scripts/runtime/mint-tailscale-key.ts uses is scoped to
 #     auth_keys only and will 403 here.
+#   - DEPOT_ORG to get a direct link to the right members page. Optional.
 #
 # What it does, per system, skipping anything already in place:
-#   1. GitHub: org invite, then adds to each --teams slug
-#   2. Arc:    adds the email as a guest user
+#   1. GitHub:  org invite, then adds to each --teams slug
+#   2. Arc:     adds the email as a guest user
 #   3. Tailnet: creates a user invite, prints the invite URL
+#   4. Depot:   prints the invite for you to do by hand, see below
+#
+# Both tiers get all four. --tier permanent additionally covers Temporal,
+# Datadog, Sentry, and AWS; those are listed as TODO in the summary until
+# they are built.
 #
 # Each system is independent. A failure in one is reported and the rest
 # still run; the exit code is nonzero if anything failed.
 #
 # Out of scope:
-#   - AWS access. Identity Center users/groups are Terraform-managed in
-#     infrastructure/terraform/production/identity.tf — add them there
-#     and let Spacelift apply it, don't click-ops it.
+#   - Depot membership. There is no API and no CLI verb for it: the API
+#     serves only Project, Build, Registry, BuildKit and Usage, and
+#     `depot org` does list, switch and show. Inviting is dashboard only
+#     unless you buy the SSO add-on and get SCIM. We print the step and
+#     record it MANUAL so the summary is still the whole checklist.
+#   - AWS access. Identity Center users and groups are Terraform-managed
+#     in infrastructure/terraform/production/identity.auto.tfvars. Add
+#     them there and let Spacelift apply it, don't click-ops it.
 #   - Removing access. Offboarding is its own path.
 
 set -euo pipefail
@@ -45,6 +56,7 @@ TAILNET="-" # "-" means the default tailnet for the OAuth client
 
 EMAIL=""
 GITHUB_USER=""
+TIER="temporary"
 TEAMS="humans,builders"
 ORG_ROLE="member"
 SKIP=""
@@ -73,12 +85,13 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --email) EMAIL="${2:-}"; shift 2 ;;
         --github) GITHUB_USER="${2:-}"; shift 2 ;;
+        --tier) TIER="${2:-}"; shift 2 ;;
         --teams) TEAMS="${2:-}"; shift 2 ;;
         --role) ORG_ROLE="${2:-}"; shift 2 ;;
         --skip) SKIP="${2:-}"; shift 2 ;;
         --apply) APPLY=1; shift ;;
         -h | --help)
-            sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) die "unknown argument: $1" ;;
@@ -90,6 +103,7 @@ done
 [[ "$EMAIL" == *@*.* ]] || die "--email doesn't look like an email: $EMAIL"
 [[ "$GITHUB_USER" =~ ^[A-Za-z0-9-]+$ ]] || die "--github isn't a valid handle: $GITHUB_USER"
 [[ "$ORG_ROLE" == "member" || "$ORG_ROLE" == "admin" ]] || die "--role must be member or admin"
+[[ "$TIER" == "temporary" || "$TIER" == "permanent" ]] || die "--tier must be temporary or permanent"
 
 # ── Pre-flight ──────────────────────────────────────────────────────
 
@@ -126,7 +140,7 @@ fi
 if [ "$APPLY" -eq 0 ]; then
     log "DRY RUN — nothing will be changed. Re-run with --apply."
 fi
-log "email=${EMAIL} github=${GITHUB_USER} teams=${TEAMS} role=${ORG_ROLE}"
+log "email=${EMAIL} github=${GITHUB_USER} tier=${TIER} teams=${TEAMS} role=${ORG_ROLE}"
 
 # ── GitHub ──────────────────────────────────────────────────────────
 
@@ -259,15 +273,39 @@ do_tailscale() {
     record "tailscale" "OK" "${url:-invite created}"
 }
 
+# ── Depot ───────────────────────────────────────────────────────────
+
+do_depot() {
+    local url="https://depot.dev/orgs"
+    [ -n "${DEPOT_ORG:-}" ] && url="https://depot.dev/orgs/${DEPOT_ORG}/settings"
+
+    # No members API and no CLI verb, so there is nothing to query for
+    # idempotency and nothing --apply could execute. Same output either way.
+    log "depot: invite ${EMAIL} by hand at ${url} (Settings > Members, role Member)"
+    record "depot" "MANUAL" "invite by hand: ${url}"
+}
+
 # ── Run ─────────────────────────────────────────────────────────────
 
 skipped github || do_github
 skipped arc || do_arc
 skipped tailscale || do_tailscale
+skipped depot || do_depot
+
+if [ "$TIER" = "permanent" ]; then
+    record "temporal" "TODO" "not built yet"
+    record "datadog" "TODO" "not built yet"
+    record "sentry" "TODO" "not built yet"
+    record "aws" "TODO" "not built yet"
+fi
 
 echo
 echo "── Summary for ${EMAIL} (${GITHUB_USER}) ──"
-printf '%s\n' "${RESULTS[@]}" | column -t -s '|'
+if [ -z "${RESULTS[*]+set}" ]; then
+    echo "nothing to do, every system was skipped"
+else
+    printf '%s\n' "${RESULTS[@]}" | column -t -s '|'
+fi
 echo
 
 if [ "$APPLY" -eq 0 ]; then
