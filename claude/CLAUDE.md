@@ -35,6 +35,7 @@ This is enforced mechanically as well as by instruction: a `PostToolUse` hook ru
 - Check for a PR template (`.github/pull_request_template.md` or `.github/PULL_REQUEST_TEMPLATE/*.md`) and fill in all sections based on the changes.
 - Write a real PR description. If the diff renders misleadingly (moved code showing up as unchanged context, for example), show the before and after in the body.
 - Marking a PR ready for review, merging, and force-pushing to a shared branch still require asking.
+- When work splits along distinct concerns (migration vs code, refactor vs behavior change, per-layer), default to a stack of chained draft PRs rather than one large PR, and use the `stacked-pr` skill. Propose the split in chat before opening anything. A genuinely single-concern change stays one PR however big it is.
 
 ## Responding to PR Review Comments
 
